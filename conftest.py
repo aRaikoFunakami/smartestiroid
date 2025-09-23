@@ -473,10 +473,13 @@ class SmartestiRoid:
         async for graph in self.agent_session():
             # ここでgraphが使用可能（セッション内）
             knowhow = """
-            1. アプリを実行するときは `appium_activate_app` ツールを使用します。
+            - アプリを実行するときは `appium_activate_app` ツールを使用します。
             例えば:
                 await appium_activate_app.ainvoke({"id": "com.android.chrome"})
-            2. エンターキーを最後に入力して確定させる場合には、`appium_set_value()` を使う時に最後に '\n' を追加しますを使用します。
+            - アプリを終了するときは `appium_terminate_app` はツールを使用します。
+            例えば:
+                await appium_terminate_app.ainvoke({"id": "com.android.chrome"})
+            - エンターキーを最後に入力して確定させる場合には、`appium_set_value()` を使う時に最後に '\n' を追加しますを使用します。
             例えば:
                 await appium_set_value.ainvoke({"args.elementUUID": "xxxx", "args.text": 'www.google.com\n'})
             
