@@ -13,7 +13,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import base64
 from PIL import Image
 import io
-import pytest
 import allure
 
 
@@ -457,7 +456,7 @@ async def agent_session():
         print("セッション終了")
 
 
-class TestAgent:
+class SmartestiRoid:
     """テスト用のPlan-and-Executeエージェントクラス"""
 
     def __init__(self, agent_session):
