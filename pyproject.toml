@@ -1,0 +1,23 @@
+[project]
+name = "test-robot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "allure-pytest>=2.15.0",
+    "anyio>=4.10.0",
+    "appium-python-client>=5.2.4",
+    "asyncio>=4.0.0",
+    "colorama>=0.4.6",
+    "langchain>=0.3.27",
+    "langchain-mcp-adapters>=0.1.9",
+    "langchain-openai>=0.3.33",
+    "langgraph>=0.6.7",
+    "openai>=1.108.0",
+    "pillow>=11.3.0",
+    "pytest-asyncio>=1.2.0",
+    "pytest-tornasync>=0.6.0.post2",
+    "pytest-trio>=0.8.0",
+    "typing-extensions>=4.14.1",
+]

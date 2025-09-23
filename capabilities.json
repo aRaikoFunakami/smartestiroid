@@ -1,0 +1,15 @@
+{
+  "android": {
+    "platformName": "Android",
+    "appium:automationName": "UiAutomator2",
+    "appium:deviceName": "Android Device",
+    "appium:platformVersion": "14",
+    "appium:udid": "emulator-5554",
+    "appium:appPackage": "com.android.chrome",
+    "appium:noReset": false,
+    "appium:autoGrantPermissions": true,
+    "appium:forceAppLaunch": true,
+    "appium:newCommandTimeout": 300
+  }
+}
+
