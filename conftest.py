@@ -420,7 +420,9 @@ async def agent_session():
 
             # エージェントエグゼキューターを作成
             llm = ChatOpenAI(model="gpt-4.1", temperature=0)
-            prompt = "あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。"
+            prompt = "あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。" \
+                "事前に select_platform と create_session を実行済みなので、再度実行してはいけません。" \
+            
             agent_executor = create_react_agent(llm, tools, prompt=prompt)
 
             # プランナーを作成
