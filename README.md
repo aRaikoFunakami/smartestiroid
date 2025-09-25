@@ -15,19 +15,58 @@
       ```sh
       uv sync
       ```
+2. **Emulatorを起動**
 
-2. **Androidテストサーバーの起動**
+エミュレータ一覧を表示
+
+```
+emulator -list-avds
+```
+
+Pixel_Tablet (環境依存) というエミュレータを起動する
+
+```
+emulator -avd Pixel_Tablet
+```
+
+コールドブートする
+
+```
+emulator -avd Pixel_Tablet -no-snapshot-load
+```
+
+初期化してブートする
+
+```
+emulator -avd Pixel_Tablet -wipe-data
+```
+
+1. **Androidテストサーバーの起動**
       - 改変した `jarvis-appium` MCPサーバーを起動してください。
       - セットアップからサーバー起動までは下記のURLを参考のこと
       - https://github.com/aRaikoFunakami/mcp-appium/blob/testroid/install.md
 
-3. **pytestで自動テスト実行**
+2. **pytestで自動テスト実行**
       ```sh
       uv run pytest test_android_app.py
       ```
       - テスト結果は `allure-results/` ディレクトリに出力されます。
 
-4. **Allureレポートの表示**
+3. **実行するテストを指定する場合**
+
+１つだけ指定する場合の例
+
+```
+uv run pytest test_android_app.py -k "TEST_0003"
+```
+
+複数指定する場合の例
+
+```
+ uv run pytest test_android_app.py -k "TEST_0003 or TEST_0004 or TEST_0005"
+ ```
+
+1. **Allureレポートの表示**
       ```sh
       allure serve allure-results
       ```
@@ -35,6 +74,8 @@
 
 
 ## トラブルシューティング
+
+### リソースリーク
 
 Androidエミュレータやデバイスとの接続不具合が発生した場合は、以下のadbコマンドでポートフォワード状態を確認・削除してください。
 
@@ -49,6 +90,14 @@ Androidエミュレータやデバイスとの接続不具合が発生した場�
       ```
 
 これで不要なポートフォワードが解消され、接続トラブルが改善する場合があります。
+
+### プリインストールアプリ (Chromeなど) のデータの初期化
+
+アプリの「/data/data/<package_name>」配下を消去します。システムアプリやプリインストールアプリ（Chrome など）には noReset が効かないため、明示的に pm clear を使う必要があるケースがあります。
+
+```
+adb -s emulator-5554 shell pm clear <package_name>
+```
 
 ## 備考
 
