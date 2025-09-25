@@ -26,12 +26,11 @@ SERVER_CONFIG = {
 
 async def main():
     client = MultiServerMCPClient(SERVER_CONFIG)
-    for server_name in SERVER_CONFIG.keys():
-        print(f"{server_name} ツール一覧:")
-        async with client.session(server_name) as session:
-            tools = await load_mcp_tools(session)
-            for t in tools:
-                print(f"- {t.name}")
+    async with client.session("jarvis-appium-sse") as session:
+        tools = await load_mcp_tools(session)
+        print(f"jarvis-appium-sse 取得ツール数: {len(tools)}")
+        for tool in tools:
+            print(f"- {tool.name}")
 
 
 if __name__ == "__main__":
