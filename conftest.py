@@ -127,7 +127,9 @@ class SimplePlanner:
 
         messages = [SystemMessage(content=content)]
 
+        image_url = False
         if image_url:
+            print(Fore.YELLOW + "画像情報が提供されました")
             messages.append(
                 HumanMessage(
                     content=[
@@ -140,6 +142,7 @@ class SimplePlanner:
                 )
             )
         else:
+            print(Fore.YELLOW + "画像情報は提供されていません")
             messages.append(
                 HumanMessage(
                     content="目標を完了するための残りのステップは何ですか？残りのステップがある場合はPlanとして返してください。"
@@ -421,7 +424,7 @@ async def agent_session():
             # エージェントエグゼキューターを作成
             llm = ChatOpenAI(model="gpt-4.1", temperature=0)
             prompt = "あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。" \
-                "事前に select_platform と create_session を実行済みなので、再度実行してはいけません。" \
+                "事前に select_platform と create_session を実行済みなので、再度実行してはいけません。" 
             
             agent_executor = create_react_agent(llm, tools, prompt=prompt)
 
@@ -481,9 +484,9 @@ class SmartestiRoid:
             - アプリを終了するときは `appium_terminate_app` はツールを使用します。
             例えば:
                 await appium_terminate_app.ainvoke({"id": "com.android.chrome"})
-            - エンターキーを最後に入力して確定させる場合には、`appium_set_value()` を使う時に最後に '\n' を追加しますを使用します。
+            - エンターキーを最後に入力して確定させる場合には、`appium_press_enter()` を使用します。
             例えば:
-                await appium_set_value.ainvoke({"args.elementUUID": "xxxx", "args.text": 'www.google.com\n'})
+                await appium_press_enter.ainvoke({})
             
             次の指示に従ってください:
             """
