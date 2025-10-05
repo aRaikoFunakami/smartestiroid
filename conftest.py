@@ -41,7 +41,7 @@ SERVER_CONFIG = {
 init(autoreset=True)
 
 
-async def evaluate_task_result(task_input: str, response: str) -> str:
+async def evaluate_task_result(task_input: str, response: str, executed_steps: list = None) -> str:
     """
     LLMを使用してタスクの結果を評価し、適切な結果ステータスを返す。
     
@@ -55,6 +55,16 @@ async def evaluate_task_result(task_input: str, response: str) -> str:
     # LLMを使用した判定
     llm = ChatOpenAI(model="gpt-5", temperature=0)
     
+    # 実行ステップ履歴の文字列化
+    steps_summary = ""
+    if executed_steps:
+        for i, step_info in enumerate(executed_steps, 1):
+            success_mark = "✓" if step_info["success"] else "✗"
+            steps_summary += f"{i}. {success_mark} {step_info['step']}\n"
+
+
+    print(f"【実行されたステップ履歴】\n{steps_summary}")
+    
     evaluation_prompt = f"""
 あなたはテスト結果の合否を判定するエキスパートです。
 以下の情報を基に、元のタスク指示で示された合否判定基準通りにテストの判定を行ったかどうかを判定してください。
@@ -63,14 +73,17 @@ async def evaluate_task_result(task_input: str, response: str) -> str:
 【元のタスク指示】
 {task_input}
 
-【実際の実行結果】
-{response}
+【実行されたステップ履歴】
+{steps_summary}
 
+【最終的な実行結果】
+{response}
 
 以下の基準で判定してください：
 
 1. PASS（合格）の条件：
    - タスクの指示通りに動作が完了している
+   - 実行されたステップが元のタスク指示と大きくズレていない
    - 期待基準が明確に満たされている
    - 実行結果が具体的で確認可能
    - 画像で判定しなければならない場合にも、画像を正しく評価している
@@ -81,9 +94,11 @@ async def evaluate_task_result(task_input: str, response: str) -> str:
    - エラーや失敗が発生している
    - 判定に主観的要素が含まれる
    - 画像で判定しなければならない場合に、画像を根拠とせずに判定している
+   - 実行されたステップが元のタスク指示から大きく逸脱している
+   - 不必要なステップが実行されている、または必要なステップが抜けている
 
 判定結果を以下のいずれかで回答してください：
-- PASS: タスクが期待通りに完了した場合
+- PASS: タスクが期待通りに完了し、実行ステップも適切な場合
 - SKIP: 目視確認が必要な場合
 
 判定理由も含めて回答してください。
@@ -300,6 +315,9 @@ def create_workflow_functions(
     
     # 画像キャッシュ（クロージャ内で管理）
     image_cache = {"previous_image_url": ""}
+    
+    # ステップ履歴キャッシュ（クロージャ内で管理）
+    step_history = {"executed_steps": []}
 
     async def execute_step(state: PlanExecute):
         with allure.step("Action: Execute"):
@@ -334,6 +352,15 @@ def create_workflow_functions(
                     name="Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+                
+                # 実行されたステップを履歴に追加
+                step_history["executed_steps"].append({
+                    "step": task,
+                    "response": agent_response["messages"][-1].content,
+                    "timestamp": time.time(),
+                    "success": True
+                })
+                
                 return {
                     "past_steps": [(task, agent_response["messages"][-1].content)],
                 }
@@ -345,6 +372,15 @@ def create_workflow_functions(
                     name="Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+                
+                # エラーも履歴に記録
+                step_history["executed_steps"].append({
+                    "step": task,
+                    "response": f"エラー: {str(e)}",
+                    "timestamp": time.time(),
+                    "success": False
+                })
+                
                 return {"past_steps": [(task, f"エラー: {str(e)}")]}
 
     async def plan_step(state: PlanExecute):
@@ -377,6 +413,9 @@ def create_workflow_functions(
                 # 初回画像をキャッシュに保存
                 image_cache["previous_image_url"] = image_url
                 
+                # ステップ履歴を初期化
+                step_history["executed_steps"] = []
+                
                 return {
                     "plan": plan.steps,
                     "replan_count": 0,  # 初期化時はreplan_countを0に設定
@@ -393,6 +432,9 @@ def create_workflow_functions(
                 )
                 # エラー時はキャッシュをクリア
                 image_cache["previous_image_url"] = ""
+                
+                # ステップ履歴も初期化
+                step_history["executed_steps"] = []
                 
                 return {
                     "plan": basic_plan.steps, 
@@ -469,10 +511,11 @@ def create_workflow_functions(
                         # 期待動作の抽出（state.inputから期待基準を取得）
                         task_input = state.get("input", "")           
                         
-                        # 合否判定ロジックを適用
+                        # 合否判定ロジックを適用（ステップ履歴も含めて）
                         evaluated_response = await evaluate_task_result(
                             task_input,
                             output.action.response, 
+                            step_history["executed_steps"]
                         )
                     
                     allure.attach(
@@ -619,21 +662,23 @@ class SmartestiRoid:
 
         async for graph in self.agent_session():
             # ここでgraphが使用可能（セッション内）
+            llm_profile = "あなたは優秀なAndroidアプリのテストエンジニアです。与えられたツールを駆使して、テストのタスクを正確に実行しなさい\n" 
             knowhow = """
-            - アプリを実行するときは `appium_activate_app` ツールを使用します。
-            例えば:
-                await appium_activate_app.ainvoke({"id": "com.android.chrome"})
-            - アプリを終了するときは `appium_terminate_app` はツールを使用します。
-            例えば:
-                await appium_terminate_app.ainvoke({"id": "com.android.chrome"})
-            - エンターキーを最後に入力して確定させる場合には、`appium_press_enter()` を使用します。
-            例えば:
-                await appium_press_enter.ainvoke({})
+            # テストを実行する際のノウハウ集
+            ここに記載したことは必ず守ってください:
             
-            次の指示に従ってください:
+            * 事前に select_platform と create_session を実行済みなので、再度実行してはいけません
+            * アプリの操作は、必ずツールを使用して行いなさい
+            * アプリの起動や終了も、必ずツールを使用して行いなさい
+            * アプリ実行/起動: appium_activate_app を使用せよ
+            * アプリ終了: appium_terminate_app を使用せよ
+            * 入力確定: appium_press_enter を使用せよ
+            
+            # テストのタスク
+            次の指示に従いなさい:
             """
 
-            inputs = {"input": knowhow + task}
+            inputs = {"input": llm_profile + knowhow + task}
 
             print(Fore.CYAN + "=== Plan-and-Execute Agent 開始 ===")
             try:
