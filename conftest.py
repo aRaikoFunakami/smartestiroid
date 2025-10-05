@@ -14,6 +14,85 @@ import base64
 from PIL import Image
 import io
 import allure
+import pytest
+
+
+# Result status constants
+EXPECTED_STATS_RESULT = "EXPECTED_STATS_RESULT"
+SKIPPED_STATS_RESULT = "SKIPPED_STATS_RESULT"
+
+
+async def evaluate_task_result(task_input: str, response: str) -> str:
+    """
+    LLMを使用してタスクの結果を評価し、適切な結果ステータスを返す。
+    
+    Args:
+        task_input: 元のタスクの指示内容
+        response: エージェントからの応答テキスト
+        
+    Returns:
+        評価後の応答テキスト（EXPECTED_STATS_RESULT または SKIPPED_STATS_RESULT を含む）
+    """
+    # LLMを使用した判定
+    llm = ChatOpenAI(model="gpt-5", temperature=0)
+    
+    evaluation_prompt = f"""
+あなたはテスト結果の合否を判定するエキスパートです。
+以下の情報を基に、元のタスク指示で示された合否判定基準通りにテストの判定を行ったかどうかを判定してください。
+ロジカルに合格と判定できても、元タスクの指示に従っていない場合はSKIPとしてください。
+
+【元のタスク指示】
+{task_input}
+
+【実際の実行結果】
+{response}
+
+
+以下の基準で判定してください：
+
+1. PASS（合格）の条件：
+   - タスクの指示通りに動作が完了している
+   - 期待基準が明確に満たされている
+   - 実行結果が具体的で確認可能
+   - 画像で判定しなければならない場合にも、画像を正しく評価している
+
+2. SKIP（要目視確認）の条件：
+   - 実行結果が曖昧で確認困難
+   - 期待基準と実行結果の対応が不明確
+   - エラーや失敗が発生している
+   - 判定に主観的要素が含まれる
+   - 画像で判定しなければならない場合に、が画像を正しく評価していない
+
+判定結果を以下のいずれかで回答してください：
+- PASS: タスクが期待通りに完了した場合
+- SKIP: 目視確認が必要な場合
+
+判定理由も含めて回答してください。
+"""
+
+    try:
+        messages = [
+            SystemMessage(content="あなたは正確なテスト結果判定を行うエキスパートです。"),
+            HumanMessage(content=evaluation_prompt)
+        ]
+        
+        evaluation_result = await llm.ainvoke(messages)
+        evaluation_content = evaluation_result.content.strip().upper()
+
+        
+        
+        # 判定結果の解析
+        if "PASS" in evaluation_content and "SKIP" not in evaluation_content:
+            print(Fore.GREEN + f"Re-Evaluation Content: {evaluation_content}")
+            return f"{response}\n再判定結果: {evaluation_content}"
+        else:
+            print(Fore.RED + f"Re-Evaluation Content: {evaluation_content}")
+            return f"{response}\n{SKIPPED_STATS_RESULT}\n再判定結果: {evaluation_content}"
+
+    except Exception as e:
+        print(f"LLM評価でエラーが発生しました: {e}")
+        # エラーの場合は安全側に倒してSKIPにする
+        return f"{response}\n{SKIPPED_STATS_RESULT}"
 
 
 SERVER_CONFIG = {
@@ -127,9 +206,7 @@ class SimplePlanner:
 
         messages = [SystemMessage(content=content)]
 
-        image_url = False
         if image_url:
-            print(Fore.YELLOW + "画像情報が提供されました")
             messages.append(
                 HumanMessage(
                     content=[
@@ -142,7 +219,6 @@ class SimplePlanner:
                 )
             )
         else:
-            print(Fore.YELLOW + "画像情報は提供されていません")
             messages.append(
                 HumanMessage(
                     content="目標を完了するための残りのステップは何ですか？残りのステップがある場合はPlanとして返してください。"
@@ -339,6 +415,27 @@ def create_workflow_functions(
                         name="Replan Response",
                         attachment_type=allure.attachment_type.TEXT,
                     )
+                    
+                    evaluated_response = output.action.response
+
+                    # 合格判定した場合はその合格判定が正しいかを再評価する
+                    # 人間の目視確認が必要な場合はSKIPにする
+                    if EXPECTED_STATS_RESULT in evaluated_response:
+                        # 期待動作の抽出（state.inputから期待基準を取得）
+                        task_input = state.get("input", "")           
+                        
+                        # 合否判定ロジックを適用
+                        evaluated_response = await evaluate_task_result(
+                            task_input,
+                            output.action.response, 
+                        )
+                    
+                    allure.attach(
+                        evaluated_response,
+                        name="Evaluated Response",
+                        attachment_type=allure.attachment_type.TEXT,
+                    )
+                    
                     elapsed = time.time() - start_time
                     allure.attach(
                         f"{elapsed:.3f}秒",
@@ -346,7 +443,7 @@ def create_workflow_functions(
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     return {
-                        "response": output.action.response,
+                        "response": evaluated_response,
                         "replan_count": current_replan_count + 1,
                     }
                 else:
@@ -511,6 +608,10 @@ class SmartestiRoid:
         # validation
         result_text = final_result.get("response", None)
         assert result_text is not None, "Agent did not return a final result."
+
+        # SKIPPED_STATS_RESULTが含まれている場合は、pytestでskipする
+        if SKIPPED_STATS_RESULT in result_text:
+            pytest.skip("このテストは出力結果の目視確認が必要です")
 
         if expected_substring:
             result_to_check = result_text.lower() if ignore_case else result_text

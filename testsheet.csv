@@ -7,7 +7,7 @@ TEST-0002,n/a,基本,基本,URL入力,URL入力でyahoo.co.jpに移動する,URL
 TEST-0003,n/a,基本,基本,URL入力,Chromeアプリを終了する,Chromeアプリを終了する,1. Chrome を終了する,Chromeアプリが終了している,EXPECTED_STATS_RESULT
 TEST-0004,n/a,基本,Bookmark,Bookmark登録,Bookmark登録,Bookmark登録,"1. Chrome を起動する
 2. yahoo.co.jp をURLバーに入力してエンターキーで確定する
-3. yahoo.cojp に移動した後にURLバーの星マークをクリックする",星マークが濃い星マークになっている,EXPECTED_STATS_RESULT
+3. yahoo.co.jp に移動した後にURLバーの星マークをクリックする",星マークが濃い星マークになっている,EXPECTED_STATS_RESULT
 TEST-0005,TEST-0004,基本,Bookmark,Bookmark削除,Bookmarkリストの確認,Bookmarkリストの確認,"
 1. 画面右上のメニューアイコン（三点リーダー）を選択する
 2. 表示されたメニューから「Bookmark」を選択する

@@ -7,6 +7,7 @@ import pandas as pd
 init(autoreset=True)
 
 EXPECTED_STATS_RESULT = "EXPECTED_STATS_RESULT"
+SKIPPED_STATS_RESULT = "SKIPPED_STATS_RESULT"
 
 
 def load_csv_cases(path: str = "testsheet.csv"):

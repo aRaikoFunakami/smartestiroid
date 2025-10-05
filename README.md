@@ -2,6 +2,75 @@
 
 このリポジトリは、Androidアプリの自動テストをpytestで実行し、Allureでテスト結果を可視化するためのサンプルです。
 
+## アーキテクチャ図
+
+```mermaid
+graph TB
+    %% ユーザー・テスト実行層
+    User[👤 ユーザー]
+    Pytest[🧪 pytest]
+    
+    %% テストデータ
+    CSV[📋 testsheet.csv<br/>テストケース定義]
+    
+    %% メインテストシステム
+    SmartestiRoid[� SmartestiRoid<br/>テストエージェント<br/>]
+    
+    %% AI・プランニング層
+    LLM[🤖 GPT-4.1-mini<br/>LLM]
+    
+    %% MCP通信層
+    MCPClient[📡 MCP Client]
+    MCPServer[🔌 jarvis-appium MCP Server]
+    
+    %% Android操作層
+    Appium[📱 Appium<br/>モバイル自動化]
+    AndroidDevice[📲 Android Device]
+    ChromeApp[🌐 アプリケーション]
+    
+    %% レポート・結果出力
+    Allure[📊 Allure Results<br/>テスト結果]
+    Report[📈 Allure Report<br/>テスト結果可視化]
+    
+    %% 設定ファイル
+    Capabilities[⚙️ capabilities.json<br/>デバイス設定]
+    
+    %% フロー定義
+    User --> Pytest
+    Pytest --> SmartestiRoid
+    CSV --> SmartestiRoid
+    
+    SmartestiRoid --> LLM
+    SmartestiRoid --> MCPClient
+    
+    MCPClient <--> MCPServer
+    MCPServer --> Appium
+    Capabilities --> MCPServer
+    
+    Appium <--> AndroidDevice
+    AndroidDevice --> ChromeApp
+    
+    SmartestiRoid --> Allure
+    Allure --> Report
+    
+    %% スタイリング
+    classDef userLayer fill:#e1f5fe
+    classDef testLayer fill:#f3e5f5
+    classDef aiLayer fill:#e8f5e8
+    classDef mcpLayer fill:#fff3e0
+    classDef deviceLayer fill:#ffebee
+    classDef reportLayer fill:#f1f8e9
+    classDef configLayer fill:#fafafa
+    
+    class User,Pytest userLayer
+    class CSV,SmartestiRoid testLayer
+    class LLM aiLayer
+    class MCPClient,MCPServer mcpLayer
+    class Appium,AndroidDevice,ChromeApp deviceLayer
+    class Allure,Report reportLayer
+    class Capabilities configLayer
+```
+
 ## 構成
 
 - `test_android_app.py` : Androidアプリの自動テスト（動的テスト関数生成）
@@ -97,6 +166,18 @@ Androidエミュレータやデバイスとの接続不具合が発生した場�
 
 ```
 adb -s emulator-5554 shell pm clear <package_name>
+```
+
+Chromeの場合
+
+```
+adb -s emulator-5554 shell pm clear com.android.chrome
+```
+
+アプリ一覧から取得したい場合
+
+```
+adb -s emulator-5554 shell pm list packages | grep chrome
 ```
 
 ## 備考
