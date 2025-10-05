@@ -21,6 +21,25 @@ import pytest
 EXPECTED_STATS_RESULT = "EXPECTED_STATS_RESULT"
 SKIPPED_STATS_RESULT = "SKIPPED_STATS_RESULT"
 
+SERVER_CONFIG = {
+    "jarvis-appium": {
+        "command": "/opt/homebrew/opt/node@20/bin/npx",
+        "args": ["-y", "jarvis-appium"],
+        "transport": "stdio",
+        "env": {
+            "CAPABILITIES_CONFIG": "/Users/raiko.funakami/GitHub/test_robot/capabilities.json",
+            "ANDROID_HOME_SDK_ROOT": "/Users/raiko.funakami/Library/Android/sdk",
+            "ANDROID_SDK_ROOT": "/Users/raiko.funakami/Library/Android/sdk",
+        },
+    },
+    "jarvis-appium-sse": {
+        "url": "http://localhost:7777/sse",
+        "transport": "sse",
+    },
+}
+
+init(autoreset=True)
+
 
 async def evaluate_task_result(task_input: str, response: str) -> str:
     """
@@ -61,7 +80,7 @@ async def evaluate_task_result(task_input: str, response: str) -> str:
    - 期待基準と実行結果の対応が不明確
    - エラーや失敗が発生している
    - 判定に主観的要素が含まれる
-   - 画像で判定しなければならない場合に、が画像を正しく評価していない
+   - 画像で判定しなければならない場合に、画像を根拠とせずに判定している
 
 判定結果を以下のいずれかで回答してください：
 - PASS: タスクが期待通りに完了した場合
@@ -93,26 +112,6 @@ async def evaluate_task_result(task_input: str, response: str) -> str:
         print(f"LLM評価でエラーが発生しました: {e}")
         # エラーの場合は安全側に倒してSKIPにする
         return f"{response}\n{SKIPPED_STATS_RESULT}"
-
-
-SERVER_CONFIG = {
-    "jarvis-appium": {
-        "command": "/opt/homebrew/opt/node@20/bin/npx",
-        "args": ["-y", "jarvis-appium"],
-        "transport": "stdio",
-        "env": {
-            "CAPABILITIES_CONFIG": "/Users/raiko.funakami/GitHub/test_robot/capabilities.json",
-            "ANDROID_HOME_SDK_ROOT": "/Users/raiko.funakami/Library/Android/sdk",
-            "ANDROID_SDK_ROOT": "/Users/raiko.funakami/Library/Android/sdk",
-        },
-    },
-    "jarvis-appium-sse": {
-        "url": "http://localhost:7777/sse",
-        "transport": "sse",
-    },
-}
-
-init(autoreset=True)
 
 
 # --- 状態定義 ---
@@ -186,7 +185,7 @@ class SimplePlanner:
         return plan
 
     async def replan(
-        self, state: PlanExecute, locator: str = "", image_url: str = ""
+        self, state: PlanExecute, locator: str = "", image_url: str = "", previous_image_url: str = ""
     ) -> Act:
         content = f"""あなたの目標: {state["input"]}
 元の計画: {str(state["plan"])}
@@ -206,7 +205,22 @@ class SimplePlanner:
 
         messages = [SystemMessage(content=content)]
 
-        if image_url:
+        if image_url and previous_image_url:
+            # 前回と現在の画像両方がある場合
+            messages.append(
+                HumanMessage(
+                    content=[
+                        {"type": "image_url", "image_url": {"url": previous_image_url}},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {
+                            "type": "text",
+                            "text": "上記の2つの画像を比較してください。1枚目が前回のアクション実行前の画面、2枚目が現在の画面です。\n\n画面の変化を分析して以下を判断してください：\n1. 前回のアクションが成功したか失敗したか\n2. 期待された変化が起きているか\n3. エラーやローディング状態になっていないか\n4. 目標に向かって進捗があるか\n\n画面変化の分析結果と現在のロケーター情報を踏まえて、目標を完了するための残りのステップを判断してください。残りのステップがある場合はPlanとして、目標が完全に達成された場合のみResponseを返してください。",
+                        },
+                    ]
+                )
+            )
+        elif image_url:
+            # 現在の画像のみの場合（初回など）
             messages.append(
                 HumanMessage(
                     content=[
@@ -283,6 +297,9 @@ def create_workflow_functions(
     Args:
         max_replan_count: 最大リプラン回数（デフォルト5回）
     """
+    
+    # 画像キャッシュ（クロージャ内で管理）
+    image_cache = {"previous_image_url": ""}
 
     async def execute_step(state: PlanExecute):
         with allure.step("Action: Execute"):
@@ -357,10 +374,13 @@ def create_workflow_functions(
                     name="Plan Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+                # 初回画像をキャッシュに保存
+                image_cache["previous_image_url"] = image_url
+                
                 return {
                     "plan": plan.steps,
-                    "replan_count": 0,
-                }  # 初期化時はreplan_countを0に設定
+                    "replan_count": 0,  # 初期化時はreplan_countを0に設定
+                }
             except Exception as e:
                 print(Fore.RED + f"plan_stepでエラー: {e}")
                 # フォールバック: 基本的なプランを作成
@@ -371,7 +391,13 @@ def create_workflow_functions(
                     name="Plan Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
-                return {"plan": basic_plan.steps, "replan_count": 0}
+                # エラー時はキャッシュをクリア
+                image_cache["previous_image_url"] = ""
+                
+                return {
+                    "plan": basic_plan.steps, 
+                    "replan_count": 0,
+                }
 
     async def replan_step(state: PlanExecute):
         with allure.step("Action: Replan"):
@@ -396,17 +422,36 @@ def create_workflow_functions(
                     "replan_count": current_replan_count + 1,
                 }
             try:
+                # 前回の画像URLをキャッシュから取得
+                previous_image_url = image_cache["previous_image_url"]
+                
+                # 現在の画面情報を取得
                 locator, image_url = await generate_screen_info(
                     screenshot_tool, generate_locators
                 )
-                output = await planner.replan(state, locator, image_url)
+                
+                # 前回画像と現在画像を使ってリプラン
+                output = await planner.replan(state, locator, image_url, previous_image_url)
+                
+                # 現在画像を次回用にキャッシュに保存
+                image_cache["previous_image_url"] = image_url
                 print(
                     Fore.YELLOW
                     + f"Replanner Output (replan #{current_replan_count + 1}): {output}"
                 )
+                
+                # 前回画像がある場合は比較用として添付
+                if previous_image_url:
+                    allure.attach(
+                        base64.b64decode(previous_image_url.replace("data:image/jpeg;base64,", "")),
+                        name="Previous Screenshot (Before Action)",
+                        attachment_type=allure.attachment_type.JPG,
+                    )
+                
+                # 現在画像を添付
                 allure.attach(
                     base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="Screenshot before Planning",
+                    name="Current Screenshot (After Action)",
                     attachment_type=allure.attachment_type.JPG,
                 )
                 if isinstance(output.action, Response):
