@@ -15,23 +15,16 @@ from PIL import Image
 import io
 import allure
 import pytest
+import json
+import os
 
+capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
 
 # Result status constants
 EXPECTED_STATS_RESULT = "EXPECTED_STATS_RESULT"
 SKIPPED_STATS_RESULT = "SKIPPED_STATS_RESULT"
 
 SERVER_CONFIG = {
-    "jarvis-appium": {
-        "command": "/opt/homebrew/opt/node@20/bin/npx",
-        "args": ["-y", "jarvis-appium"],
-        "transport": "stdio",
-        "env": {
-            "CAPABILITIES_CONFIG": "/Users/raiko.funakami/GitHub/test_robot/capabilities.json",
-            "ANDROID_HOME_SDK_ROOT": "/Users/raiko.funakami/Library/Android/sdk",
-            "ANDROID_SDK_ROOT": "/Users/raiko.funakami/Library/Android/sdk",
-        },
-    },
     "jarvis-appium-sse": {
         "url": "http://localhost:7777/sse",
         "transport": "sse",
@@ -599,7 +592,21 @@ async def agent_session():
             pre_action_results += f"select_platform ツールを呼び出しました: {platform}\n"
 
             print("create_session 実行...")
-            session_result = await create_session.ainvoke({"platform": "android"})
+
+            try:
+                with open(capabilities_path, 'r') as f:
+                    capabilities = json.load(f)
+                session_result = await create_session.ainvoke({
+                    "platform": "android", 
+                    "capabilities": capabilities
+                })
+            except FileNotFoundError:
+                print(f"警告: {capabilities_path} が見つかりません。デフォルト設定で実行します。")
+                session_result = await create_session.ainvoke({"platform": "android"})
+            except json.JSONDecodeError:
+                print(f"警告: {capabilities_path} のJSON形式が無効です。デフォルト設定で実行します。")
+                session_result = await create_session.ainvoke({"platform": "android"})
+                
             print("create_session結果:", session_result)
             pre_action_results += (
                 f"create_session ツールを呼び出しました: {session_result}\n"
