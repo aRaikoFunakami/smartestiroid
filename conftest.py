@@ -584,8 +584,12 @@ def create_workflow_functions(
     return execute_step, plan_step, replan_step, should_end
 
 
-async def agent_session():
-    """MCPセッション内でgraphを作成し、セッションを維持しながらyieldする"""
+async def agent_session(no_reset: bool = True):
+    """MCPセッション内でgraphを作成し、セッションを維持しながらyieldする
+
+    Args:
+        no_reset: appium:noResetの設定値。True（デフォルト）はリセットなし、Falseはリセットあり。
+    """
 
     try:
         client = MultiServerMCPClient(SERVER_CONFIG)
@@ -609,27 +613,40 @@ async def agent_session():
             )
 
             print("create_session 実行...")
+            print(f"appium:noReset設定: {no_reset}")
 
             try:
                 with open(capabilities_path, "r") as f:
                     capabilities = json.load(f)
-                session_result = await create_session.ainvoke(
-                    {
-                        "platform": "android",
-                        "appium:waitForIdleTimeout": 1000,
-                        "capabilities": capabilities,
-                    }
-                )
+
+                # capabilitiesをベースにして必要な設定を上書き
+                session_params = {
+                    "platform": "android",
+                    "capabilities": capabilities  # ネストさせる
+                }
+
+                # 任意の追加設定
+                session_params["capabilities"].update({
+                    "appium:waitForIdleTimeout": 1000,
+                    "appium:noReset": no_reset,
+                    "appium:dontStopAppOnReset": no_reset,
+                })
+                print(f"create_sessionパラメータ: {json.dumps(session_params, indent=2, ensure_ascii=False)}")
+                session_result = await create_session.ainvoke(session_params)
             except FileNotFoundError:
                 print(
                     f"警告: {capabilities_path} が見つかりません。デフォルト設定で実行します。"
                 )
-                session_result = await create_session.ainvoke({"platform": "android"})
+                session_result = await create_session.ainvoke(
+                    {"platform": "android", "appium:noReset": no_reset}
+                )
             except json.JSONDecodeError:
                 print(
                     f"警告: {capabilities_path} のJSON形式が無効です。デフォルト設定で実行します。"
                 )
-                session_result = await create_session.ainvoke({"platform": "android"})
+                session_result = await create_session.ainvoke(
+                    {"platform": "android", "appium:noReset": no_reset}
+                )
 
             print("create_session結果:", session_result)
             pre_action_results += (
@@ -685,8 +702,9 @@ async def agent_session():
 class SmartestiRoid:
     """テスト用のPlan-and-Executeエージェントクラス"""
 
-    def __init__(self, agent_session):
+    def __init__(self, agent_session, no_reset: bool = True):
         self.agent_session = agent_session
+        self.no_reset = no_reset
 
     async def validate_task(
         self,
@@ -696,7 +714,7 @@ class SmartestiRoid:
     ) -> str:
         config = {"recursion_limit": 50}
 
-        async for graph in self.agent_session():
+        async for graph in self.agent_session(self.no_reset):
             # ここでgraphが使用可能（セッション内）
             llm_profile = "あなたは優秀なAndroidアプリのテストエンジニアです。与えられたツールを駆使して、テストのタスクを正確に実行しなさい\n"
             knowhow = """

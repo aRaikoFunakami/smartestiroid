@@ -58,6 +58,11 @@ def create_test_function(case, test_num):
         steps = str(case.get("Step", "")).strip()
         expected = case.get("ExpectedResults").strip()
         criteria = str(case.get("Criteria")).strip()
+        
+        # Reset列の値を取得してno_reset値を決定
+        reset_value = str(case.get("Reset", "")).strip()
+        # "Reset"の場合はno_reset=False（リセットあり）、"noReset"の場合はno_reset=True（リセットなし）
+        no_reset = reset_value.lower() != 'reset'
 
         task = (
             f"手順: {steps}\n"
@@ -82,9 +87,10 @@ def create_test_function(case, test_num):
         # Execute steps via your agent
         with allure.step(title):
             print(Fore.YELLOW + f"=== テストケース: {title} (ID={cid}) ===")
+            print(Fore.YELLOW + f"Reset設定: {reset_value} → appium:noReset={no_reset}")
             print(Fore.YELLOW + f"タスク: {steps}")
             print(Fore.YELLOW + f"期待される基準: {expected}")
-            agent = SmartestiRoid(agent_session)
+            agent = SmartestiRoid(agent_session, no_reset)
             agent_response = await agent.validate_task(
                 task=task,
                 expected_substring=criteria,
