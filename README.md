@@ -111,6 +111,9 @@ scoop install allure
 
 ```bash
 # Python仮想環境と依存ライブラリを同期
+git clone https://github.com/aRaikoFunakami/smartestiroid.git
+cd smartestiroid
+uv python install
 uv sync
 ```
 
