@@ -2,8 +2,8 @@
   "platformName": "Android",
   "appium:deviceName": "sdk_gphone64_arm64",
   "appium:automationName": "UiAutomator2",
-  "appium:appWaitActivity": "*",
   "appium:appPackage": "com.android.chrome",
+  "appium:appWaitActivity": "*",
   "appium:udid": "emulator-5554",
   "appium:noReset": false
 }

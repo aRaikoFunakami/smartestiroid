@@ -34,20 +34,22 @@ SERVER_CONFIG = {
 init(autoreset=True)
 
 
-async def evaluate_task_result(task_input: str, response: str, executed_steps: list = None) -> str:
+async def evaluate_task_result(
+    task_input: str, response: str, executed_steps: list = None
+) -> str:
     """
     LLMを使用してタスクの結果を評価し、適切な結果ステータスを返す。
-    
+
     Args:
         task_input: 元のタスクの指示内容
         response: エージェントからの応答テキスト
-        
+
     Returns:
         評価後の応答テキスト（EXPECTED_STATS_RESULT または SKIPPED_STATS_RESULT を含む）
     """
     # LLMを使用した判定
     llm = ChatOpenAI(model="gpt-5", temperature=0)
-    
+
     # 実行ステップ履歴の文字列化
     steps_summary = ""
     if executed_steps:
@@ -55,9 +57,8 @@ async def evaluate_task_result(task_input: str, response: str, executed_steps: l
             success_mark = "✓" if step_info["success"] else "✗"
             steps_summary += f"{i}. {success_mark} {step_info['step']}\n"
 
-
     print(f"【実行されたステップ履歴】\n{steps_summary}")
-    
+
     evaluation_prompt = f"""
 あなたはテスト結果の合否を判定するエキスパートです。
 以下の情報を基に、元のタスク指示で示された合否判定基準通りにテストの判定を行ったかどうかを判定してください。
@@ -99,22 +100,24 @@ async def evaluate_task_result(task_input: str, response: str, executed_steps: l
 
     try:
         messages = [
-            SystemMessage(content="あなたは正確なテスト結果判定を行うエキスパートです。"),
-            HumanMessage(content=evaluation_prompt)
+            SystemMessage(
+                content="あなたは正確なテスト結果判定を行うエキスパートです。"
+            ),
+            HumanMessage(content=evaluation_prompt),
         ]
-        
+
         evaluation_result = await llm.ainvoke(messages)
         evaluation_content = evaluation_result.content.strip().upper()
 
-        
-        
         # 判定結果の解析
         if "PASS" in evaluation_content and "SKIP" not in evaluation_content:
             print(Fore.GREEN + f"Re-Evaluation Content: {evaluation_content}")
             return f"{response}\n再判定結果: {evaluation_content}"
         else:
             print(Fore.RED + f"Re-Evaluation Content: {evaluation_content}")
-            return f"{response}\n{SKIPPED_STATS_RESULT}\n再判定結果: {evaluation_content}"
+            return (
+                f"{response}\n{SKIPPED_STATS_RESULT}\n再判定結果: {evaluation_content}"
+            )
 
     except Exception as e:
         print(f"LLM評価でエラーが発生しました: {e}")
@@ -193,7 +196,11 @@ class SimplePlanner:
         return plan
 
     async def replan(
-        self, state: PlanExecute, locator: str = "", image_url: str = "", previous_image_url: str = ""
+        self,
+        state: PlanExecute,
+        locator: str = "",
+        image_url: str = "",
+        previous_image_url: str = "",
     ) -> Act:
         content = f"""あなたの目標: {state["input"]}
 元の計画: {str(state["plan"])}
@@ -306,10 +313,10 @@ def create_workflow_functions(
     Args:
         max_replan_count: 最大リプラン回数（デフォルト5回）
     """
-    
+
     # 画像キャッシュ（クロージャ内で管理）
     image_cache = {"previous_image_url": ""}
-    
+
     # ステップ履歴キャッシュ（クロージャ内で管理）
     step_history = {"executed_steps": []}
 
@@ -346,15 +353,17 @@ def create_workflow_functions(
                     name="Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
-                
+
                 # 実行されたステップを履歴に追加
-                step_history["executed_steps"].append({
-                    "step": task,
-                    "response": agent_response["messages"][-1].content,
-                    "timestamp": time.time(),
-                    "success": True
-                })
-                
+                step_history["executed_steps"].append(
+                    {
+                        "step": task,
+                        "response": agent_response["messages"][-1].content,
+                        "timestamp": time.time(),
+                        "success": True,
+                    }
+                )
+
                 return {
                     "past_steps": [(task, agent_response["messages"][-1].content)],
                 }
@@ -366,15 +375,17 @@ def create_workflow_functions(
                     name="Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
-                
+
                 # エラーも履歴に記録
-                step_history["executed_steps"].append({
-                    "step": task,
-                    "response": f"エラー: {str(e)}",
-                    "timestamp": time.time(),
-                    "success": False
-                })
-                
+                step_history["executed_steps"].append(
+                    {
+                        "step": task,
+                        "response": f"エラー: {str(e)}",
+                        "timestamp": time.time(),
+                        "success": False,
+                    }
+                )
+
                 return {"past_steps": [(task, f"エラー: {str(e)}")]}
 
     async def plan_step(state: PlanExecute):
@@ -406,10 +417,10 @@ def create_workflow_functions(
                 )
                 # 初回画像をキャッシュに保存
                 image_cache["previous_image_url"] = image_url
-                
+
                 # ステップ履歴を初期化
                 step_history["executed_steps"] = []
-                
+
                 return {
                     "plan": plan.steps,
                     "replan_count": 0,  # 初期化時はreplan_countを0に設定
@@ -426,12 +437,12 @@ def create_workflow_functions(
                 )
                 # エラー時はキャッシュをクリア
                 image_cache["previous_image_url"] = ""
-                
+
                 # ステップ履歴も初期化
                 step_history["executed_steps"] = []
-                
+
                 return {
-                    "plan": basic_plan.steps, 
+                    "plan": basic_plan.steps,
                     "replan_count": 0,
                 }
 
@@ -460,30 +471,34 @@ def create_workflow_functions(
             try:
                 # 前回の画像URLをキャッシュから取得
                 previous_image_url = image_cache["previous_image_url"]
-                
+
                 # 現在の画面情報を取得
                 locator, image_url = await generate_screen_info(
                     screenshot_tool, generate_locators
                 )
-                
+
                 # 前回画像と現在画像を使ってリプラン
-                output = await planner.replan(state, locator, image_url, previous_image_url)
-                
+                output = await planner.replan(
+                    state, locator, image_url, previous_image_url
+                )
+
                 # 現在画像を次回用にキャッシュに保存
                 image_cache["previous_image_url"] = image_url
                 print(
                     Fore.YELLOW
                     + f"Replanner Output (replan #{current_replan_count + 1}): {output}"
                 )
-                
+
                 # 前回画像がある場合は比較用として添付
                 if previous_image_url:
                     allure.attach(
-                        base64.b64decode(previous_image_url.replace("data:image/jpeg;base64,", "")),
+                        base64.b64decode(
+                            previous_image_url.replace("data:image/jpeg;base64,", "")
+                        ),
                         name="Previous Screenshot (Before Action)",
                         attachment_type=allure.attachment_type.JPG,
                     )
-                
+
                 # 現在画像を添付
                 allure.attach(
                     base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
@@ -496,28 +511,28 @@ def create_workflow_functions(
                         name="Replan Response",
                         attachment_type=allure.attachment_type.TEXT,
                     )
-                    
+
                     evaluated_response = output.action.response
 
                     # 合格判定した場合はその合格判定が正しいかを再評価する
                     # 人間の目視確認が必要な場合はSKIPにする
                     if EXPECTED_STATS_RESULT in evaluated_response:
                         # 期待動作の抽出（state.inputから期待基準を取得）
-                        task_input = state.get("input", "")           
-                        
+                        task_input = state.get("input", "")
+
                         # 合否判定ロジックを適用（ステップ履歴も含めて）
                         evaluated_response = await evaluate_task_result(
                             task_input,
-                            output.action.response, 
-                            step_history["executed_steps"]
+                            output.action.response,
+                            step_history["executed_steps"],
                         )
-                    
+
                     allure.attach(
                         evaluated_response,
                         name="Evaluated Response",
                         attachment_type=allure.attachment_type.TEXT,
                     )
-                    
+
                     elapsed = time.time() - start_time
                     allure.attach(
                         f"{elapsed:.3f}秒",
@@ -589,24 +604,33 @@ async def agent_session():
             print("select_platform 実行...")
             platform = await select_platform.ainvoke({"platform": "android"})
             print("select_platform結果:", platform)
-            pre_action_results += f"select_platform ツールを呼び出しました: {platform}\n"
+            pre_action_results += (
+                f"select_platform ツールを呼び出しました: {platform}\n"
+            )
 
             print("create_session 実行...")
 
             try:
-                with open(capabilities_path, 'r') as f:
+                with open(capabilities_path, "r") as f:
                     capabilities = json.load(f)
-                session_result = await create_session.ainvoke({
-                    "platform": "android", 
-                    "capabilities": capabilities
-                })
+                session_result = await create_session.ainvoke(
+                    {
+                        "platform": "android",
+                        "appium:waitForIdleTimeout": 1000,
+                        "capabilities": capabilities,
+                    }
+                )
             except FileNotFoundError:
-                print(f"警告: {capabilities_path} が見つかりません。デフォルト設定で実行します。")
+                print(
+                    f"警告: {capabilities_path} が見つかりません。デフォルト設定で実行します。"
+                )
                 session_result = await create_session.ainvoke({"platform": "android"})
             except json.JSONDecodeError:
-                print(f"警告: {capabilities_path} のJSON形式が無効です。デフォルト設定で実行します。")
+                print(
+                    f"警告: {capabilities_path} のJSON形式が無効です。デフォルト設定で実行します。"
+                )
                 session_result = await create_session.ainvoke({"platform": "android"})
-                
+
             print("create_session結果:", session_result)
             pre_action_results += (
                 f"create_session ツールを呼び出しました: {session_result}\n"
@@ -616,9 +640,11 @@ async def agent_session():
 
             # エージェントエグゼキューターを作成
             llm = ChatOpenAI(model="gpt-4.1", temperature=0)
-            prompt = "あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。" \
-                "事前に select_platform と create_session を実行済みなので、再度実行してはいけません。" 
-            
+            prompt = (
+                "あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。"
+                "事前に select_platform と create_session を実行済みなので、再度実行してはいけません。"
+            )
+
             agent_executor = create_react_agent(llm, tools, prompt=prompt)
 
             # プランナーを作成
@@ -626,12 +652,14 @@ async def agent_session():
 
             # ワークフロー関数を作成（セッション内のツールを使用）
             max_replan_count = 10
-            execute_step, plan_step, replan_step, should_end = create_workflow_functions(
-                planner,
-                agent_executor,
-                screenshot_tool,
-                generate_locators,
-                max_replan_count,
+            execute_step, plan_step, replan_step, should_end = (
+                create_workflow_functions(
+                    planner,
+                    agent_executor,
+                    screenshot_tool,
+                    generate_locators,
+                    max_replan_count,
+                )
             )
 
             # ワークフローを構築
@@ -670,7 +698,7 @@ class SmartestiRoid:
 
         async for graph in self.agent_session():
             # ここでgraphが使用可能（セッション内）
-            llm_profile = "あなたは優秀なAndroidアプリのテストエンジニアです。与えられたツールを駆使して、テストのタスクを正確に実行しなさい\n" 
+            llm_profile = "あなたは優秀なAndroidアプリのテストエンジニアです。与えられたツールを駆使して、テストのタスクを正確に実行しなさい\n"
             knowhow = """
             # テストを実行する際のノウハウ集
             ここに記載したことは必ず守ってください:
@@ -678,7 +706,7 @@ class SmartestiRoid:
             * 事前に select_platform と create_session を実行済みなので、再度実行してはいけません
             * アプリの操作は、必ずツールを使用して行いなさい
             * アプリの起動や終了も、必ずツールを使用して行いなさい
-            * アプリ実行/起動: appium_activate_app を使用せよ
+            * アプリ実行/起動: appium_activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップで良い)
             * アプリ終了: appium_terminate_app を使用せよ
             * 入力確定: appium_press_enter を使用せよ
             
@@ -720,4 +748,3 @@ class SmartestiRoid:
                 f"Assertion failed: Expected '{expected_substring}' not found in agent result: '{result_text}'"
             )
         return result_text
-
