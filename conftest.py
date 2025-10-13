@@ -627,9 +627,11 @@ async def agent_session(no_reset: bool = True):
 
                 # 任意の追加設定
                 session_params["capabilities"].update({
-                    "appium:waitForIdleTimeout": 1000,
-                    "appium:noReset": no_reset,
-                    "appium:dontStopAppOnReset": no_reset,
+                    "appium:waitForIdleTimeout": 1000, # 高速化のため待機タイムアウトを1秒に設定
+                    "appium:noReset": no_reset, # noResetがTrueならアプリをリセットしない
+                    "appium:dontStopAppOnReset": no_reset, # noResetがTrueならアプリを停止しない (noResetと連動)
+                    "appium:appWaitActivity": "*", # すべてのアクティビティを待機
+                    "appium:autoGrantPermissions": True, # 権限を自動付与
                 })
                 print(f"create_sessionパラメータ: {json.dumps(session_params, indent=2, ensure_ascii=False)}")
                 session_result = await create_session.ainvoke(session_params)
