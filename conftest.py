@@ -306,7 +306,7 @@ def create_workflow_functions(
     agent_executor,
     screenshot_tool,
     generate_locators,
-    max_replan_count: int = 5,
+    max_replan_count: int = 10,
 ):
     """ワークフロー関数を作成する（セッション内のツールを使用）
 
@@ -670,7 +670,7 @@ async def agent_session(no_reset: bool = True):
             planner = SimplePlanner(pre_action_results)
 
             # ワークフロー関数を作成（セッション内のツールを使用）
-            max_replan_count = 10
+            max_replan_count = 20
             execute_step, plan_step, replan_step, should_end = (
                 create_workflow_functions(
                     planner,

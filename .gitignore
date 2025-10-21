@@ -212,3 +212,4 @@ capabilities_*.json
 *_screenshot.*
 TODO.md
 allure-*
+.DS_Store

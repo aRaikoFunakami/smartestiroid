@@ -1,11 +1,11 @@
 ﻿ID,Reset,Epic,Feature,Story,Title,Description,Step,ExpectedResults,Criteria
-TEST_0001,Reset,Chrome基本操作,新しいタブの操作,新規タブを開く操作を行う,「New Tab」を開く,Chrome を起動し、メニューアイコンから「New Tab」を選択して新しいタブを開く操作を確認する。,"1. Chrome を起動する
+TEST_0001,Reset,Chrome基本操作,新しいタブの操作,新規タブを開く操作を行う,「New Tab」を開く,Chrome が起動していることを確認する、メニューアイコンから「New Tab」を選択して新しいタブを開く操作を確認する。,"1. Chrome を起動する
 2. 画面右上のメニューアイコン（三点リーダー）を選択する
 3. 表示されたメニューから「New Tab」を選択する",判定基準: 画面上部のタブバーに新しいタブが追加され、合計2つのタブが表示されていること,EXPECTED_STATS_RESULT
 TEST_0002,Reset,Chrome基本操作,Webサイトへのアクセス,URLを入力して指定サイトへアクセスする,yahoo.co.jp にアクセスする,Chrome を起動し、URLバーに「yahoo.co.jp」を入力して正しくサイトが表示されることを確認する。,"1. Chrome を起動する
 2. yahoo.co.jp をURLバーに入力してエンターキーで確定する","画面上部のURLバーに「yahoo.co.jp」と表示され,yahooのトップページが表示されていること",EXPECTED_STATS_RESULT
 TEST_0003,Reset,Chrome基本操作,アプリケーションの終了,ブラウザを正常に終了させる,Chrome を終了する,起動中の Chrome を正しく終了できることを確認する。,1. Chrome を終了する,Chromeアプリが終了している,EXPECTED_STATS_RESULT
-TEST_0004,Reset,Chrome基本操作,ブックマークの作成,指定サイトをブックマーク登録する,yahoo.co.jp をブックマーク登録する,yahoo.co.jp にアクセス後、URLバーの星マークをクリックしてブックマークを追加する操作を確認する。,"1. Chrome を起動する
+TEST_0004,Reset,Chrome基本操作,ブックマークの作成,指定サイトをブックマーク登録する,yahoo.co.jp をブックマーク登録する,yahoo.co.jp にアクセス後、URLバーの星マークをクリックしてブックマークを追加する操作を確認する。,"1. Chrome が起動していることを確認する
 2. yahoo.co.jp をURLバーに入力してエンターキーで確定する
 3. yahoo.co.jp に移動した後にURLバーの星マークをクリックする",URLバーの星マークが濃い星マークになっている,EXPECTED_STATS_RESULT
 TEST_0005,noReset,Chrome基本操作,ブックマークの閲覧,登録済みブックマークを開く,Mobilebookmarks を開く,メニューから「Bookmark」を選択し、保存された「Mobilebookmarks」フォルダを開く操作を確認する。,"
