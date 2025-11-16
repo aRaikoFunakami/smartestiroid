@@ -24,6 +24,19 @@ capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
 EXPECTED_STATS_RESULT = "EXPECTED_STATS_RESULT"
 SKIPPED_STATS_RESULT = "SKIPPED_STATS_RESULT"
 
+# Knowhow information for all LLMs
+KNOWHOW_INFO = """
+【重要な前提条件】
+* 事前に select_platform と create_session を実行済みなので、再度実行してはいけません
+
+【ツール使用のルール - 必ず守ること】
+* アプリの操作は、必ずツールを使用して行いなさい
+* アプリの起動や終了も、必ずツールを使用して行いなさい
+* アプリ実行/起動: appium_activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップで良い)
+* アプリ終了: appium_terminate_app を使用せよ
+* 入力確定: appium_press_enter を使用せよ
+"""
+
 SERVER_CONFIG = {
     "jarvis-appium-sse": {
         "url": "http://localhost:7777/sse",
@@ -154,9 +167,10 @@ class Act(BaseModel):
 class SimplePlanner:
     """テスト用のシンプルなプランナー"""
 
-    def __init__(self, pre_action_results: str = ""):
+    def __init__(self, pre_action_results: str = "", knowhow: str = KNOWHOW_INFO):
         self.llm = ChatOpenAI(model="gpt-4.1", temperature=0)
         self.pre_action_results = pre_action_results
+        self.knowhow = knowhow  # ノウハウ情報を保持
 
     async def create_plan(
         self, user_input: str, locator: str = "", image_url: str = ""
@@ -171,6 +185,9 @@ class SimplePlanner:
 
         if locator:
             content += f"\n\n画面ロケーター情報: {locator}"
+        
+        # 制約・ルールは最後に配置（最も重要な情報として強調）
+        content += f"\n\n{self.knowhow}"
 
         messages = [SystemMessage(content=content)]
 
@@ -202,7 +219,12 @@ class SimplePlanner:
         image_url: str = "",
         previous_image_url: str = "",
     ) -> Act:
-        content = f"""あなたの目標: {state["input"]}
+        system_content = f"""あなたは計画の再評価と次のステップ決定を行うエキスパートです。
+以下のノウハウに従ってタスクを遂行してください。
+
+{self.knowhow}"""
+
+        user_content = f"""あなたの目標: {state["input"]}
 元の計画: {str(state["plan"])}
 現在完了したステップ: {str(state["past_steps"])}
 
@@ -212,14 +234,18 @@ class SimplePlanner:
 3. 全体の目標が100%完了し、これ以上のアクションが不要な場合のみResponseを返してください
 4. 次に必要なアクションが存在する場合は Response を返してはならない
 5. 次に必要なアクションが存在する場合はは、それをPlanに含めてください
-6. 前のステップでエラーが発生した場合は、それを考慮して代替アプローチを考えてください。
-7. レスポンスを返すときは必ずレスポンスを返した理由を詳細に述べてください。画像の変化やロケーター情報の変化を含めることが重要です。
+6. 前のステップでエラーが発生した場合は、それを考慮して代替アプローチを考えてください
+7. レスポンスを返すときは必ずレスポンスを返した理由を詳細に述べてください。画像の変化やロケーター情報の変化を含めることが重要です
+
 覚えておいてください: あなたの仕事は、現在の状態を観察するだけでなく、実行可能なステップを提供することです。"""
 
         if locator:
-            content += f"\n\n現在の画面ロケーター情報: {locator}"
+            user_content += f"\n\n現在の画面ロケーター情報: {locator}"
 
-        messages = [SystemMessage(content=content)]
+        messages = [
+            SystemMessage(content=system_content),
+            HumanMessage(content=user_content)
+        ]
 
         if image_url and previous_image_url:
             # 前回と現在の画像両方がある場合
@@ -230,7 +256,19 @@ class SimplePlanner:
                         {"type": "image_url", "image_url": {"url": image_url}},
                         {
                             "type": "text",
-                            "text": "上記の2つの画像を比較してください。1枚目が前回のアクション実行前の画面、2枚目が現在の画面です。\n\n画面の変化を分析して以下を判断してください：\n1. 前回のアクションが成功したか失敗したか\n2. 期待された変化が起きているか\n3. エラーやローディング状態になっていないか\n4. 目標に向かって進捗があるか\n\n画面変化の分析結果と現在のロケーター情報を踏まえて、目標を完了するための残りのステップを判断してください。残りのステップがある場合はPlanとして、目標が完全に達成された場合のみResponseを返してください。",
+                            "text": (
+                                "上記の2つの画像を比較してください。1枚目が前回のアクション実行前の画面、2枚目が現在の画面です。\n\n"
+                                "画面の変化を分析して以下を判断してください：\n"
+                                "1. 前回のアクションが成功したか失敗したか\n"
+                                "2. 期待された変化が起きているか\n"
+                                "3. エラーやローディング状態になっていないか\n"
+                                "4. 目標に向かって進捗があるか\n\n"
+                                "【最優先指示】\n"
+                                "画面変化の分析結果と現在のロケーター情報を踏まえて、目標を完了するための残りのステップを判断してください。\n\n"
+                                "⚠️ 重要：残りのステップが1つでも存在する場合は「必ずPlan」を返してください。Responseを返してはいけません。\n"
+                                "⚠️ 目標が100%完全に達成され、これ以上のアクションが一切不要な場合「のみ」Responseを返してください。\n\n"
+                                "分析の結果「残りのステップ」について言及している場合は、それは「Plan」を返すべきサインです。"
+                            ),
                         },
                     ]
                 )
@@ -243,7 +281,13 @@ class SimplePlanner:
                         {"type": "image_url", "image_url": {"url": image_url}},
                         {
                             "type": "text",
-                            "text": "現在の画面状態（スクリーンショットとロケータの2つ）に基づいて、目標を完了するための残りのステップは何ですか？残りのステップがある場合はPlanとして返してください。目標が完全に達成された場合のみResponseを使用してください。必ずロケーター情報も考慮してください。",
+                            "text": (
+                                "現在の画面状態（スクリーンショットとロケータの2つ）に基づいて、目標を完了するための残りのステップは何ですか？\n\n"
+                                "【最優先指示】\n"
+                                "⚠️ 重要：残りのステップが1つでも存在する場合は「必ずPlan」を返してください。Responseを返してはいけません。\n"
+                                "⚠️ 目標が100%完全に達成され、これ以上のアクションが一切不要な場合「のみ」Responseを返してください。\n\n"
+                                "分析の結果「残りのステップ」について言及している場合は、それは「Plan」を返すべきサインです。必ずロケーター情報も考慮してください。"
+                            ),
                         },
                     ]
                 )
@@ -307,11 +351,13 @@ def create_workflow_functions(
     screenshot_tool,
     generate_locators,
     max_replan_count: int = 10,
+    knowhow: str = KNOWHOW_INFO,
 ):
     """ワークフロー関数を作成する（セッション内のツールを使用）
 
     Args:
         max_replan_count: 最大リプラン回数（デフォルト5回）
+        knowhow: ノウハウ情報（SimplePlannerに渡される）
     """
 
     # 画像キャッシュ（クロージャ内で管理）
@@ -584,11 +630,12 @@ def create_workflow_functions(
     return execute_step, plan_step, replan_step, should_end
 
 
-async def agent_session(no_reset: bool = True):
+async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
     """MCPセッション内でgraphを作成し、セッションを維持しながらyieldする
 
     Args:
         no_reset: appium:noResetの設定値。True（デフォルト）はリセットなし、Falseはリセットあり。
+        knowhow: ノウハウ情報。デフォルトはKNOWHOW_INFO、カスタムknowhowを渡すことも可能。
     """
 
     try:
@@ -657,17 +704,17 @@ async def agent_session(no_reset: bool = True):
 
             print(Fore.GREEN + f"pre_action_results: {pre_action_results}")
 
-            # エージェントエグゼキューターを作成
+            # エージェントエグゼキューターを作成（カスタムknowhowを使用）
             llm = ChatOpenAI(model="gpt-4.1", temperature=0)
-            prompt = (
-                "あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。"
-                "事前に select_platform と create_session を実行済みなので、再度実行してはいけません。"
-            )
+            prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。
+
+{knowhow}
+"""
 
             agent_executor = create_react_agent(llm, tools, prompt=prompt)
 
-            # プランナーを作成
-            planner = SimplePlanner(pre_action_results)
+            # プランナーを作成（カスタムknowhowを渡す）
+            planner = SimplePlanner(pre_action_results, knowhow)
 
             # ワークフロー関数を作成（セッション内のツールを使用）
             max_replan_count = 20
@@ -678,6 +725,7 @@ async def agent_session(no_reset: bool = True):
                     screenshot_tool,
                     generate_locators,
                     max_replan_count,
+                    knowhow,
                 )
             )
 
@@ -704,37 +752,40 @@ async def agent_session(no_reset: bool = True):
 class SmartestiRoid:
     """テスト用のPlan-and-Executeエージェントクラス"""
 
-    def __init__(self, agent_session, no_reset: bool = True):
+    def __init__(self, agent_session, no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
         self.agent_session = agent_session
         self.no_reset = no_reset
+        self.knowhow = knowhow  # ノウハウ情報を保持
 
     async def validate_task(
         self,
         task: str,
         expected_substring: Optional[str] = None,
         ignore_case: bool = False,
+        knowhow: Optional[str] = None,
     ) -> str:
+        """
+        タスクを実行して結果を検証する
+        
+        Args:
+            task: 実行するタスク
+            expected_substring: 期待される部分文字列
+            ignore_case: 大文字小文字を無視するか
+            knowhow: カスタムknowhow情報（Noneの場合はインスタンスのknowhowを使用）
+        """
         config = {"recursion_limit": 50}
 
-        async for graph in self.agent_session(self.no_reset):
-            # ここでgraphが使用可能（セッション内）
-            llm_profile = "あなたは優秀なAndroidアプリのテストエンジニアです。与えられたツールを駆使して、テストのタスクを正確に実行しなさい\n"
-            knowhow = """
-            # テストを実行する際のノウハウ集
-            ここに記載したことは必ず守ってください:
-            
-            * 事前に select_platform と create_session を実行済みなので、再度実行してはいけません
-            * アプリの操作は、必ずツールを使用して行いなさい
-            * アプリの起動や終了も、必ずツールを使用して行いなさい
-            * アプリ実行/起動: appium_activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップで良い)
-            * アプリ終了: appium_terminate_app を使用せよ
-            * 入力確定: appium_press_enter を使用せよ
-            
-            # テストのタスク
-            次の指示に従いなさい:
-            """
+        # knowhowの決定: メソッド引数 > インスタンス変数 > デフォルト
+        effective_knowhow = knowhow if knowhow is not None else self.knowhow
 
-            inputs = {"input": llm_profile + knowhow + task}
+        # カスタムknowhowを使用する場合、新しいセッションを作成
+        async for graph in self.agent_session(self.no_reset, effective_knowhow):
+            # state["input"]には純粋なタスクのみを渡す
+            # knowhowは各LLM（SimplePlanner、agent_executor）が既に持っている
+            inputs = {"input": task}
+            
+            if knowhow is not None:
+                print(Fore.YELLOW + f"カスタムknowhow情報を使用: {knowhow[:100]}...")
 
             print(Fore.CYAN + "=== Plan-and-Execute Agent 開始 ===")
             try:
