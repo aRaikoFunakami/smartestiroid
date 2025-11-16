@@ -47,6 +47,55 @@ SERVER_CONFIG = {
 init(autoreset=True)
 
 
+# Pytest hooks for command-line options
+def pytest_addoption(parser):
+    """pytest コマンドラインオプションを追加"""
+    parser.addoption(
+        "--knowhow",
+        action="store",
+        default=None,
+        help="カスタムknowhow情報のファイルパス（全テストに適用）"
+    )
+    parser.addoption(
+        "--knowhow-text",
+        action="store",
+        default=None,
+        help="カスタムknowhow情報を直接指定（全テストに適用）"
+    )
+
+
+@pytest.fixture(scope="session")
+def custom_knowhow(request):
+    """カスタムknowhow情報を取得するfixture
+    
+    優先順位:
+    1. --knowhow-text オプション（コマンドラインから直接指定）
+    2. --knowhow オプション（ファイルパスから読み込み）
+    3. デフォルト（KNOWHOW_INFO）
+    """
+    # テキストが直接指定された場合（最優先）
+    knowhow_text = request.config.getoption("--knowhow-text")
+    if knowhow_text:
+        print(Fore.CYAN + "📝 カスタムknowhow（直接指定）を使用します")
+        return knowhow_text
+    
+    # ファイルパスが指定された場合
+    knowhow_path = request.config.getoption("--knowhow")
+    if knowhow_path:
+        try:
+            with open(knowhow_path, "r", encoding="utf-8") as f:
+                knowhow_content = f.read()
+            print(Fore.CYAN + f"📝 カスタムknowhow（ファイル: {knowhow_path}）を使用します")
+            return knowhow_content
+        except FileNotFoundError:
+            print(Fore.RED + f"⚠️  警告: knowhowファイル '{knowhow_path}' が見つかりません。デフォルトを使用します。")
+        except Exception as e:
+            print(Fore.RED + f"⚠️  警告: knowhowファイルの読み込みエラー: {e}。デフォルトを使用します。")
+    
+    # デフォルト
+    return KNOWHOW_INFO
+
+
 async def evaluate_task_result(
     task_input: str, response: str, executed_steps: list = None
 ) -> str:
@@ -715,6 +764,13 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
 
             # プランナーを作成（カスタムknowhowを渡す）
             planner = SimplePlanner(pre_action_results, knowhow)
+
+            # LLMに渡されるknowhow情報を表示
+            print(Fore.MAGENTA + "=" * 60)
+            print(Fore.MAGENTA + "【LLMに渡されるknowhow情報】")
+            print(Fore.MAGENTA + "=" * 60)
+            print(Fore.CYAN + knowhow)
+            print(Fore.MAGENTA + "=" * 60)
 
             # ワークフロー関数を作成（セッション内のツールを使用）
             max_replan_count = 20

@@ -41,7 +41,7 @@ def create_test_function(case, test_num):
     @allure.epic(epic)
     @allure.feature(feature)
     @allure.story(story)
-    async def dynamic_test():
+    async def dynamic_test(custom_knowhow):  # fixtureを引数に追加
         """Run one row from testsheet.csv as a test case."""
         
         # テスト進捗ログ
@@ -90,7 +90,9 @@ def create_test_function(case, test_num):
             print(Fore.YELLOW + f"Reset設定: {reset_value} → appium:noReset={no_reset}")
             print(Fore.YELLOW + f"タスク: {steps}")
             print(Fore.YELLOW + f"期待される基準: {expected}")
-            agent = SmartestiRoid(agent_session, no_reset)
+            
+            # カスタムknowhowを使用してエージェントを作成
+            agent = SmartestiRoid(agent_session, no_reset, knowhow=custom_knowhow)
             agent_response = await agent.validate_task(
                 task=task,
                 expected_substring=criteria,

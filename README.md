@@ -174,6 +174,47 @@ uv run pytest test_android_app.py -k "TEST_0003 or TEST_0004 or TEST_0005"
 > `-k` オプションはpytestのフィルタ機能です。  
 > テストケースIDをもとに動的に関数が生成されるため、`-` や空白は `_` に置き換えられます。
 
+#### 🔹 カスタムknowhow（ツール使用ルール）を指定する場合
+
+デフォルトのツール使用ルールをカスタマイズしたい場合、`--knowhow` オプションでファイルパスを指定できます。
+
+ファイルから読み込む場合:
+
+```bash
+uv run pytest test_android_app.py --knowhow=custom_knowhow_example.txt
+```
+
+コマンドラインで直接指定する場合:
+
+```bash
+uv run pytest test_android_app.py --knowhow-text="【カスタムルール】スクロール操作は慎重に行うこと"
+```
+
+複数テストと組み合わせる場合:
+
+```bash
+uv run pytest test_android_app.py --knowhow=custom_knowhow_example.txt -k "TEST_0003 or TEST_0004"
+```
+
+> **knowhowとは？**  
+> LLMエージェントがツールを使用する際のルールや制約条件を記述したテキストです。  
+> デフォルトでは`conftest.py`の`KNOWHOW_INFO`が使用されます。  
+> カスタムknowhowを指定することで、テストケースごとの特殊なルールを適用できます。
+
+**カスタムknowhowの例:**
+
+```text
+【重要な前提条件】
+* 事前に select_platform と create_session を実行済みなので、再度実行してはいけません
+
+【ツール使用のルール - 必ず守ること】
+* アプリの操作は、必ずツールを使用して行いなさい
+* スクロール操作: 必ず appium_scroll を使用し、画面の80%の範囲でスクロールすること
+* 長押し操作: appium_long_press を2秒間保持して使用すること
+```
+
+サンプルファイル `custom_knowhow_example.txt` が同梱されています。
+
 ---
 
 ### 5. Allureレポートを表示
