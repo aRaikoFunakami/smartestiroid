@@ -62,6 +62,12 @@ def pytest_addoption(parser):
         default=None,
         help="カスタムknowhow情報を直接指定（全テストに適用）"
     )
+    parser.addoption(
+        "--testsheet",
+        action="store",
+        default="testsheet.csv",
+        help="テストケース定義CSVファイルのパス（デフォルト: testsheet.csv）"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -94,6 +100,17 @@ def custom_knowhow(request):
     
     # デフォルト
     return KNOWHOW_INFO
+
+
+@pytest.fixture(scope="session")
+def testsheet_path(request):
+    """テストシートCSVファイルのパスを取得するfixture
+    
+    --testsheet オプションで指定されたパス、またはデフォルトの testsheet.csv を返す
+    """
+    path = request.config.getoption("--testsheet")
+    print(Fore.CYAN + f"📋 テストシートCSV: {path}")
+    return path
 
 
 async def evaluate_task_result(
