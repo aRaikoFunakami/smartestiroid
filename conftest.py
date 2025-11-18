@@ -17,6 +17,7 @@ import allure
 import pytest
 import json
 import os
+import asyncio
 
 capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
 
@@ -774,6 +775,11 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
             pre_action_results += (
                 f"create_session ツールを呼び出しました: {session_result}\n"
             )
+
+            # アプリの自動起動を待つ（3秒待機）
+            print("アプリ起動待機中... (3秒)")
+            await asyncio.sleep(3)
+            print("待機完了")
 
             print(Fore.GREEN + f"pre_action_results: {pre_action_results}")
 
