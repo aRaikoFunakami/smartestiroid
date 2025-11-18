@@ -113,6 +113,13 @@ def testsheet_path(request):
     return path
 
 
+def pytest_configure(config):
+    """pytest設定時にグローバル変数を設定"""
+    # テストシートパスをグローバル変数として保存
+    import sys
+    sys._pytest_testsheet_path = config.getoption("--testsheet")
+
+
 async def evaluate_task_result(
     task_input: str, response: str, executed_steps: list = None
 ) -> str:

@@ -159,16 +159,32 @@ uv run pytest test_android_app.py
 
 > 実行後、テスト結果は `allure-results/` ディレクトリに出力されます。
 
+#### 🔹 カスタムテストシートCSVを指定する場合
+
+デフォルトでは`testsheet.csv`が使用されますが、`--testsheet`オプションで別のCSVファイルを指定できます。
+
+```bash
+uv run pytest test_android_app.py --testsheet=testsheet_en.csv
+```
+
 #### 🔹 特定のテストのみ実行する場合
 
 1つだけ実行する場合:
+
 ```bash
 uv run pytest test_android_app.py -k "TEST_0003"
 ```
 
 複数のテストを実行する場合:
+
 ```bash
 uv run pytest test_android_app.py -k "TEST_0003 or TEST_0004 or TEST_0005"
+```
+
+カスタムCSVと組み合わせる場合:
+
+```bash
+uv run pytest test_android_app.py --testsheet=testsheet_en.csv -k "TEST_0001"
 ```
 
 > `-k` オプションはpytestのフィルタ機能です。  
