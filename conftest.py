@@ -18,8 +18,14 @@ import pytest
 import json
 import os
 import asyncio
+import time
+from openai import Timeout, APIError, RateLimitError, APIConnectionError, AuthenticationError
 
 capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
+
+# OpenAI API timeout settings
+OPENAI_TIMEOUT = 180.0  # 180秒
+OPENAI_MAX_RETRIES = 1  # リトライ1回
 
 # Result status constants
 EXPECTED_STATS_RESULT = "EXPECTED_STATS_RESULT"
@@ -46,6 +52,78 @@ SERVER_CONFIG = {
 }
 
 init(autoreset=True)
+
+
+def log_openai_timeout_to_allure(location: str, model: str, elapsed: float, context: dict = None):
+    """OpenAI タイムアウトエラーを Allure に記録する共通関数
+    
+    Args:
+        location: 発生箇所（関数名など）
+        model: モデル名
+        elapsed: 経過時間（秒）
+        context: 追加のコンテキスト情報（辞書形式）
+    """
+    error_details = f"""OpenAI API タイムアウト
+発生箇所: {location}
+モデル: {model}
+経過時間: {elapsed:.2f}秒 / タイムアウト設定: {OPENAI_TIMEOUT}秒"""
+    
+    if context:
+        error_details += "\n\nコンテキスト:"
+        for key, value in context.items():
+            error_details += f"\n- {key}: {value}"
+    
+    print(Fore.RED + f"❌ OpenAI API タイムアウト in {location}: {elapsed:.2f}秒")
+    
+    allure.attach(
+        error_details,
+        name=f"🚨 OpenAI Timeout in {location}",
+        attachment_type=allure.attachment_type.TEXT
+    )
+    allure.dynamic.label("error_type", "openai_timeout")
+    allure.dynamic.label("error_location", location)
+    allure.dynamic.label("model", model)
+
+
+def log_openai_error_to_allure(error_type: str, location: str, model: str, error: Exception, context: dict = None):
+    """OpenAI API エラー全般を Allure に記録する共通関数
+    
+    Args:
+        error_type: エラー種別（RateLimitError, APIError など）
+        location: 発生箇所（関数名など）
+        model: モデル名
+        error: 例外オブジェクト
+        context: 追加のコンテキスト情報（辞書形式）
+    """
+    error_details = f"""OpenAI API エラー
+エラー種別: {error_type}
+発生箇所: {location}
+モデル: {model}
+エラー内容: {str(error)}"""
+    
+    if context:
+        error_details += "\n\nコンテキスト:"
+        for key, value in context.items():
+            error_details += f"\n- {key}: {value}"
+    
+    # エラー種別に応じた色分け
+    if error_type == "RateLimitError":
+        print(Fore.YELLOW + f"⚠️  OpenAI API レート制限 in {location}")
+    elif error_type == "AuthenticationError":
+        print(Fore.RED + f"🔐 OpenAI API 認証エラー in {location}")
+    elif error_type == "APIConnectionError":
+        print(Fore.YELLOW + f"🌐 OpenAI API 接続エラー in {location}")
+    else:
+        print(Fore.RED + f"❌ OpenAI API エラー ({error_type}) in {location}")
+    
+    allure.attach(
+        error_details,
+        name=f"🚨 OpenAI {error_type} in {location}",
+        attachment_type=allure.attachment_type.TEXT
+    )
+    allure.dynamic.label("error_type", f"openai_{error_type.lower()}")
+    allure.dynamic.label("error_location", location)
+    allure.dynamic.label("model", model)
 
 
 # Pytest hooks for command-line options
@@ -134,8 +212,15 @@ async def evaluate_task_result(
     Returns:
         評価後の応答テキスト（EXPECTED_STATS_RESULT または SKIPPED_STATS_RESULT を含む）
     """
+    start_time = time.time()
+    
     # LLMを使用した判定
-    llm = ChatOpenAI(model="gpt-5", temperature=0)
+    llm = ChatOpenAI(
+        model="gpt-5",
+        temperature=0,
+        timeout=OPENAI_TIMEOUT,
+        max_retries=OPENAI_MAX_RETRIES
+    )
 
     # 実行ステップ履歴の文字列化
     steps_summary = ""
@@ -206,6 +291,52 @@ async def evaluate_task_result(
                 f"{response}\n{SKIPPED_STATS_RESULT}\n再判定結果: {evaluation_content}"
             )
 
+    except Timeout:
+        elapsed = time.time() - start_time
+        log_openai_timeout_to_allure(
+            location="evaluate_task_result",
+            model="gpt-5",
+            elapsed=elapsed
+        )
+        # タイムアウトの場合は安全側に倒してSKIPにする
+        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API タイムアウト"
+    
+    except RateLimitError as e:
+        log_openai_error_to_allure(
+            error_type="RateLimitError",
+            location="evaluate_task_result",
+            model="gpt-5",
+            error=e
+        )
+        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API レート制限"
+    
+    except AuthenticationError as e:
+        log_openai_error_to_allure(
+            error_type="AuthenticationError",
+            location="evaluate_task_result",
+            model="gpt-5",
+            error=e
+        )
+        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API 認証エラー"
+    
+    except APIConnectionError as e:
+        log_openai_error_to_allure(
+            error_type="APIConnectionError",
+            location="evaluate_task_result",
+            model="gpt-5",
+            error=e
+        )
+        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API 接続エラー"
+    
+    except APIError as e:
+        log_openai_error_to_allure(
+            error_type="APIError",
+            location="evaluate_task_result",
+            model="gpt-5",
+            error=e
+        )
+        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API エラー"
+        
     except Exception as e:
         print(f"LLM評価でエラーが発生しました: {e}")
         # エラーの場合は安全側に倒してSKIPにする
@@ -242,13 +373,20 @@ class SimplePlanner:
     """テスト用のシンプルなプランナー"""
 
     def __init__(self, pre_action_results: str = "", knowhow: str = KNOWHOW_INFO):
-        self.llm = ChatOpenAI(model="gpt-4.1", temperature=0)
+        self.llm = ChatOpenAI(
+            model="gpt-4.1",
+            temperature=0,
+            timeout=OPENAI_TIMEOUT,
+            max_retries=OPENAI_MAX_RETRIES
+        )
         self.pre_action_results = pre_action_results
         self.knowhow = knowhow  # ノウハウ情報を保持
 
     async def create_plan(
         self, user_input: str, locator: str = "", image_url: str = ""
     ) -> Plan:
+        start_time = time.time()
+        
         content = f"""与えられた目標に対して、シンプルなステップバイステップの計画を作成してください。
 この計画は、正しく実行されれば正解を得られる個別のタスクで構成される必要があります。
 不要なステップは追加しないでください。最終ステップの結果が最終的な答えとなります。
@@ -282,9 +420,55 @@ class SimplePlanner:
                 HumanMessage(content="この目標のための計画を作成してください。")
             )
 
-        structured_llm = self.llm.with_structured_output(Plan)
-        plan = await structured_llm.ainvoke(messages)
-        return plan
+        try:
+            structured_llm = self.llm.with_structured_output(Plan)
+            plan = await structured_llm.ainvoke(messages)
+            return plan
+            
+        except Timeout:
+            elapsed = time.time() - start_time
+            log_openai_timeout_to_allure(
+                location="SimplePlanner.create_plan",
+                model=self.llm.model_name,
+                elapsed=elapsed
+            )
+            raise
+        
+        except RateLimitError as e:
+            log_openai_error_to_allure(
+                error_type="RateLimitError",
+                location="SimplePlanner.create_plan",
+                model=self.llm.model_name,
+                error=e
+            )
+            raise
+        
+        except AuthenticationError as e:
+            log_openai_error_to_allure(
+                error_type="AuthenticationError",
+                location="SimplePlanner.create_plan",
+                model=self.llm.model_name,
+                error=e
+            )
+            raise
+        
+        except APIConnectionError as e:
+            log_openai_error_to_allure(
+                error_type="APIConnectionError",
+                location="SimplePlanner.create_plan",
+                model=self.llm.model_name,
+                error=e
+            )
+            raise
+        
+        except APIError as e:
+            log_openai_error_to_allure(
+                error_type="APIError",
+                location="SimplePlanner.create_plan",
+                model=self.llm.model_name,
+                error=e
+            )
+            raise
 
     async def replan(
         self,
@@ -293,6 +477,8 @@ class SimplePlanner:
         image_url: str = "",
         previous_image_url: str = "",
     ) -> Act:
+        start_time = time.time()
+        
         system_content = f"""あなたは計画の再評価と次のステップ決定を行うエキスパートです。
 以下のノウハウに従ってタスクを遂行してください。
 
@@ -373,9 +559,55 @@ class SimplePlanner:
                 )
             )
 
-        structured_llm = self.llm.with_structured_output(Act)
-        act = await structured_llm.ainvoke(messages)
-        return act
+        try:
+            structured_llm = self.llm.with_structured_output(Act)
+            act = await structured_llm.ainvoke(messages)
+            return act
+            
+        except Timeout:
+            elapsed = time.time() - start_time
+            log_openai_timeout_to_allure(
+                location="SimplePlanner.replan",
+                model=self.llm.model_name,
+                elapsed=elapsed
+            )
+            raise
+        
+        except RateLimitError as e:
+            log_openai_error_to_allure(
+                error_type="RateLimitError",
+                location="SimplePlanner.replan",
+                model=self.llm.model_name,
+                error=e
+            )
+            raise
+        
+        except AuthenticationError as e:
+            log_openai_error_to_allure(
+                error_type="AuthenticationError",
+                location="SimplePlanner.replan",
+                model=self.llm.model_name,
+                error=e
+            )
+            raise
+        
+        except APIConnectionError as e:
+            log_openai_error_to_allure(
+                error_type="APIConnectionError",
+                location="SimplePlanner.replan",
+                model=self.llm.model_name,
+                error=e
+            )
+            raise
+        
+        except APIError as e:
+            log_openai_error_to_allure(
+                error_type="APIError",
+                location="SimplePlanner.replan",
+                model=self.llm.model_name,
+                error=e
+            )
+            raise
 
 
 # --- ヘルパー関数 ---
@@ -784,7 +1016,12 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
             print(Fore.GREEN + f"pre_action_results: {pre_action_results}")
 
             # エージェントエグゼキューターを作成（カスタムknowhowを使用）
-            llm = ChatOpenAI(model="gpt-4.1", temperature=0)
+            llm = ChatOpenAI(
+                model="gpt-4.1",
+                temperature=0,
+                timeout=OPENAI_TIMEOUT,
+                max_retries=OPENAI_MAX_RETRIES
+            )
             prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。
 
 {knowhow}
