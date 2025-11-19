@@ -956,6 +956,8 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
             create_session = next(t for t in tools if t.name == "create_session")
             screenshot_tool = next(t for t in tools if t.name == "appium_screenshot")
             generate_locators = next(t for t in tools if t.name == "generate_locators")
+            activate_app = next(t for t in tools if t.name == "appium_activate_app")
+            terminate_app = next(t for t in tools if t.name == "appium_terminate_app")
 
             # プラットフォーム選択とセッション作成
             print("select_platform 実行...")
@@ -982,7 +984,6 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
                 session_params["capabilities"].update({
                     "appium:waitForIdleTimeout": 1000, # 高速化のため待機タイムアウトを1秒に設定
                     "appium:noReset": no_reset, # noResetがTrueならアプリをリセットしない
-                    "appium:dontStopAppOnReset": no_reset, # noResetがTrueならアプリを停止しない (noResetと連動)
                     "appium:appWaitActivity": "*", # すべてのアクティビティを待機
                     "appium:autoGrantPermissions": True, # 権限を自動付与
                 })
@@ -1008,10 +1009,36 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
                 f"create_session ツールを呼び出しました: {session_result}\n"
             )
 
-            # アプリの自動起動を待つ（3秒待機）
-            print("アプリ起動待機中... (3秒)")
-            await asyncio.sleep(3)
-            print("待機完了")
+            # noReset=True の場合、appPackageで指定されたアプリを強制起動
+            if no_reset:
+                app_package = session_params.get("capabilities", {}).get("appium:appPackage")
+                if app_package:
+                    print(Fore.CYAN + f"noReset=True: アプリを強制起動します (appPackage={app_package})")
+                    try:
+                        activate_result = await activate_app.ainvoke({"id": app_package})
+                        print(f"appium_activate_app結果: {activate_result}")
+                        pre_action_results += f"appium_activate_app ツールを呼び出しました: {activate_result}\n"
+                        # アプリ起動を待つ（3秒）
+                        print("アプリ起動待機中... (3秒)")
+                        await asyncio.sleep(3)
+                        print("待機完了")
+                    except Exception as e:
+                        print(Fore.YELLOW + f"⚠️  appium_activate_app実行エラー: {e}")
+                        # エラーでも継続（アプリが既に起動している可能性）
+                        print("アプリ起動待機中... (3秒)")
+                        await asyncio.sleep(3)
+                        print("待機完了")
+                else:
+                    print(Fore.YELLOW + "⚠️  appPackageが指定されていないため、アプリ起動をスキップします")
+                    # アプリの自動起動を待つ（3秒待機）
+                    print("アプリ起動待機中... (3秒)")
+                    await asyncio.sleep(3)
+                    print("待機完了")
+            else:
+                # noReset=False の場合は通常通り待機のみ
+                print("アプリ起動待機中... (3秒)")
+                await asyncio.sleep(3)
+                print("待機完了")
 
             print(Fore.GREEN + f"pre_action_results: {pre_action_results}")
 
@@ -1064,7 +1091,25 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
             graph = workflow.compile()
 
             # graphとpast_stepsをyieldして、セッションを維持
-            yield graph
+            try:
+                yield graph
+            finally:
+                # テスト終了時にアプリを終了
+                app_package = None
+                try:
+                    with open(capabilities_path, "r") as f:
+                        capabilities = json.load(f)
+                        app_package = capabilities.get("appium:appPackage")
+                except Exception:
+                    pass
+                
+                if app_package:
+                    print(Fore.CYAN + f"テスト終了: アプリを終了します (appPackage={app_package})")
+                    try:
+                        terminate_result = await terminate_app.ainvoke({"id": app_package})
+                        print(f"appium_terminate_app結果: {terminate_result}")
+                    except Exception as e:
+                        print(Fore.YELLOW + f"⚠️  appium_terminate_app実行エラー: {e}")
     except Exception as e:
         print(Fore.RED + f"agent_sessionでエラー: {e}")
         raise e
