@@ -343,6 +343,32 @@ async def evaluate_task_result(
         return f"{response}\n{SKIPPED_STATS_RESULT}"
 
 
+# --- ヘルパー関数: ロケーター情報整形 ---
+def format_locator_info(locator: str) -> str:
+    """ロケーター情報をJSONとして見やすく整形する
+    
+    Args:
+        locator: 生のロケーター情報文字列（JSON形式）
+    
+    Returns:
+        整形されたJSON文字列
+    """
+    if not locator or locator.strip() == "":
+        return "ロケーター情報なし"
+    
+    try:
+        import json
+        locator_data = json.loads(locator)
+        # インデント付きで整形
+        formatted = json.dumps(locator_data, indent=2, ensure_ascii=False)
+        return f"\n画面ロケーター情報（整形済み）:\n{formatted}"
+        
+    except json.JSONDecodeError:
+        return f"ロケーター情報のJSON解析エラー\n生データ: {locator[:200]}..."
+    except Exception as e:
+        return f"ロケーター情報の整形エラー: {str(e)}\n生データ: {locator[:200]}..."
+
+
 # --- 状態定義 ---
 class PlanExecute(TypedDict):
     input: str
@@ -396,7 +422,17 @@ class SimplePlanner:
 実行済みのアクション結果: {self.pre_action_results}"""
 
         if locator:
+            # LLMには生のロケーター情報を渡す
             content += f"\n\n画面ロケーター情報: {locator}"
+            
+            # ログとAllureには整形したロケーター情報を出力
+            formatted_locator = format_locator_info(locator)
+            print(Fore.CYAN + formatted_locator[:200] + "..." if len(formatted_locator) > 200 else Fore.CYAN + formatted_locator)
+            allure.attach(
+                formatted_locator,
+                name="📍 create_plan: ロケーター情報（整形済み）",
+                attachment_type=allure.attachment_type.TEXT
+            )
         
         # 制約・ルールは最後に配置（最も重要な情報として強調）
         content += f"\n\n{self.knowhow}"
@@ -500,7 +536,17 @@ class SimplePlanner:
 覚えておいてください: あなたの仕事は、現在の状態を観察するだけでなく、実行可能なステップを提供することです。"""
 
         if locator:
+            # LLMには生のロケーター情報を渡す
             user_content += f"\n\n現在の画面ロケーター情報: {locator}"
+            
+            # ログとAllureには整形したロケーター情報を出力
+            formatted_locator = format_locator_info(locator)
+            print(Fore.CYAN + (formatted_locator[:200] + "..." if len(formatted_locator) > 200 else formatted_locator))
+            allure.attach(
+                formatted_locator,
+                name="📍 replan: ロケーター情報（整形済み）",
+                attachment_type=allure.attachment_type.TEXT
+            )
 
         messages = [
             SystemMessage(content=system_content),
@@ -682,11 +728,65 @@ def create_workflow_functions(
                 return {"past_steps": [("error", "計画が空です")]}
             plan_str = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan))
             task = plan[0]
-            task_formatted = f"""以下の計画について: {plan_str}\n\nあなたはステップ1の実行を担当します: {task}"""
-            try:
-                agent_response = await agent_executor.ainvoke(
-                    {"messages": [("user", task_formatted)]}
+            
+            # 現在の画面情報を取得
+            locator, image_url = await generate_screen_info(
+                screenshot_tool, generate_locators
+            )
+            
+            # ログとAllureには整形したロケーター情報を出力
+            formatted_locator = format_locator_info(locator)
+            print(Fore.CYAN + f"\n[Execute Step]{formatted_locator[:200]}..." if len(formatted_locator) > 200 else Fore.CYAN + f"\n[Execute Step]{formatted_locator}")
+            
+            # タスクにロケーター情報と画像相互補完の指示を含める（LLMには生データを渡す）
+            task_formatted = f"""以下の計画について: {plan_str}
+
+あなたはステップ1の実行を担当します: {task}
+
+【重要】画像とロケーター情報の相互補完について:
+- 画像には視覚的に見えるアイコンやボタンの位置情報が含まれています
+- ロケーター情報には画像で見えない要素のID/XPath/bounds座標が含まれています
+- 両方の情報を突き合わせて、ターゲット要素を特定してください
+
+例：
+• 画像で「Prime Video」アイコンが見えるが、ロケーターに明確なラベルがない場合
+  → 画像の位置とロケーターのbounds座標を照合して要素を特定
+• ロケーターに特定のresource-idがあるが、画像では見えない要素の場合
+  → ロケーター情報から直接IDやXPathを使用してアクセス
+
+必ず画像とロケーターの両方を確認し、最も確実な方法でターゲット要素を操作してください。
+
+画面ロケーター情報:
+{locator}"""
+            
+            # Allure添付（整形済み）
+            allure.attach(
+                formatted_locator,
+                name="📍 execute_step: ロケーター情報（整形済み）",
+                attachment_type=allure.attachment_type.TEXT
+            )
+            if image_url:
+                allure.attach(
+                    base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
+                    name="Execute Step: Current Screen",
+                    attachment_type=allure.attachment_type.JPG,
                 )
+            
+            try:
+                # 画像がある場合はマルチモーダルメッセージとして送信
+                if image_url:
+                    agent_response = await agent_executor.ainvoke(
+                        {"messages": [HumanMessage(
+                            content=[
+                                {"type": "text", "text": task_formatted},
+                                {"type": "image_url", "image_url": {"url": image_url}}
+                            ]
+                        )]}
+                    )
+                else:
+                    agent_response = await agent_executor.ainvoke(
+                        {"messages": [("user", task_formatted)]}
+                    )
                 log_text = f"ステップ '{task}' のエージェント応答: {agent_response['messages'][-1].content}"
                 print(Fore.RED + log_text)
                 allure.attach(
