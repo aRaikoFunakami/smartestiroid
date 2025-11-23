@@ -520,8 +520,8 @@ class MultiStageReplanner:
 
 【タスク】
 タスクの完了を報告してください。以下を含めること：
-1. 完了理由（1〜3行）
-2. 目標が達成されていることの根拠
+1. 完了理由の詳細をロケーター情報や画面状態に基づいて説明
+2. 目標が達成されていることの根拠をロケーター情報や画面状態に基づいて詳細に説明
 3. 最後の行に必ず {EXPECTED_STATS_RESULT} を単独で記載
 
 出力形式:
@@ -620,21 +620,6 @@ class SimplePlanner:
         try:
             structured_llm = self.llm.with_structured_output(Plan)
             plan = await structured_llm.ainvoke(messages)
-
-            # reasoningのログ保存
-            try:
-                log_entry = {
-                    "timestamp": time.time(),
-                    "goal": user_input,
-                    "steps": plan.steps,
-                    "reasoning": plan.reasoning,
-                    "model": self.llm.model_name
-                }
-                log_path = os.path.join(os.getcwd(), "plan_reasoning_log.jsonl")
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-            except Exception as log_err:
-                print(Fore.YELLOW + f"⚠️ reasoningログ保存失敗: {log_err}")
 
             if plan.reasoning:
                 allure.attach(plan.reasoning, name="🧠 Plan Reasoning", attachment_type=allure.attachment_type.TEXT)
@@ -1317,22 +1302,27 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
 
             print(Fore.GREEN + f"pre_action_results: {pre_action_results}")
 
+            # 環境変数でmulti-stageモード判定
+            use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
+            if use_mini_model:
+                model = "gpt-4.1-mini"
+            else:
+                model = "gpt-4.1"
+            
+            print(Fore.CYAN + f"使用モデル: {model}")
+
             # エージェントエグゼキューターを作成（カスタムknowhowを使用）
             llm = ChatOpenAI(
-                model="gpt-4.1",
+                model=model,
                 temperature=0,
                 timeout=OPENAI_TIMEOUT,
                 max_retries=OPENAI_MAX_RETRIES
             )
-            prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。
-
-{knowhow}
-"""
+            prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。\n{knowhow}\n"""
 
             agent_executor = create_react_agent(llm, tools, prompt=prompt)
 
-            # 環境変数でmulti-stageモード判定
-            use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
+
             
             if use_mini_model:
                 print(Fore.CYAN + "🔀 Multi-stage replan モードで起動（gpt-4.1-mini使用）")
@@ -1347,7 +1337,7 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
                 planner = SimplePlanner(
                     pre_action_results, 
                     knowhow, 
-                    multi_stage=False, 
+                    multi_stage=True, 
                     model_name="gpt-4.1"
                 )
 
