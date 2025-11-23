@@ -1,5 +1,5 @@
 import operator
-from typing import Annotated, List, Tuple, Union, Optional
+from typing import Annotated, List, Tuple, Union, Optional, Dict, Any, Literal
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 from colorama import Fore, init
@@ -19,7 +19,7 @@ import json
 import os
 import asyncio
 import time
-from openai import Timeout, APIError, RateLimitError, APIConnectionError, AuthenticationError
+# 不要となった詳細例外型や時間計測は簡素化のため削除
 
 capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
 
@@ -202,21 +202,17 @@ def pytest_configure(config):
 async def evaluate_task_result(
     task_input: str, response: str, executed_steps: list = None
 ) -> str:
-    """
-    LLMを使用してタスクの結果を評価し、適切な結果ステータスを返す。
+    """タスク結果を構造化評価し EXPECTED_STATS_RESULT / SKIPPED_STATS_RESULT を厳密返却する"""
+    use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
+    if use_mini_model:
+        print(Fore.CYAN + "🔀 Miniモデルによる再評価モード有効")
+        model = "gpt-5-mini"
+    else:
+        model = "gpt-5"
 
-    Args:
-        task_input: 元のタスクの指示内容
-        response: エージェントからの応答テキスト
-
-    Returns:
-        評価後の応答テキスト（EXPECTED_STATS_RESULT または SKIPPED_STATS_RESULT を含む）
-    """
-    start_time = time.time()
-    
-    # LLMを使用した判定
+    # モデルは現状固定（簡素化）
     llm = ChatOpenAI(
-        model="gpt-5",
+        model=model,
         temperature=0,
         timeout=OPENAI_TIMEOUT,
         max_retries=OPENAI_MAX_RETRIES
@@ -232,115 +228,70 @@ async def evaluate_task_result(
     print(f"【実行されたステップ履歴】\n{steps_summary}")
 
     evaluation_prompt = f"""
-あなたはテスト結果の合否を判定するエキスパートです。
-以下の情報を基に、元のタスク指示で示された合否判定基準通りにテストの判定を行ったかどうかを判定してください。
-ロジカルに合格と判定できても、元タスクの指示に従っていない場合はSKIPとしてください。
+あなたはテスト結果判定のエキスパートです。以下を厳密に検証し JSON のみで返答してください。
 
-【元のタスク指示】
+【元タスク指示】
 {task_input}
 
-【実行されたステップ履歴】
-{steps_summary}
+【実行ステップ履歴】
+{steps_summary or '(なし)'}
 
-【最終的な実行結果】
+【最終応答】
 {response}
 
-以下の基準で判定してください：
+判定規則:
+1. {EXPECTED_STATS_RESULT} の条件:
+    - 指示手順を過不足なく実行
+    - 不要/逸脱ステップなし
+    - 初期設定ダイアログ対応や広告ダイアログ対応は不要/逸脱ステップに含めない
+    - 応答内に期待基準へ直接対応する具体的根拠（要素ID / text / 画像説明 / 操作結果）が存在
+    - 画像評価が必要なケースではその根拠を言及
+2. {SKIPPED_STATS_RESULT} の条件:
+    - 根拠が曖昧 / 反証不能 / 主観的
+    - 必要手順不足 or 余計な操作あり
+    - ロケータ / 画像確認が必要なのに不十分
+    - エラー / 不整合 / 判定困難
 
-1. PASS（合格）の条件：
-   - タスクの指示通りに動作が完了している
-   - 実行されたステップが元のタスク指示と大きくズレていない
-   - 期待基準が明確に満たされている
-   - 実行結果が具体的で確認可能
-   - 画像で判定しなければならない場合にも、画像を正しく評価している
-
-2. SKIP（要目視確認）の条件：
-   - 実行結果が曖昧で確認困難
-   - 期待基準と実行結果の対応が不明確
-   - エラーや失敗が発生している
-   - 判定に主観的要素が含まれる
-   - 画像で判定しなければならない場合に、画像を根拠とせずに判定している
-   - 実行されたステップが元のタスク指示から大きく逸脱している
-   - 不必要なステップが実行されている、または必要なステップが抜けている
-
-判定結果を以下のいずれかで回答してください：
-- PASS: タスクが期待通りに完了し、実行ステップも適切な場合
-- SKIP: 目視確認が必要な場合
-
-判定理由も含めて回答してください。
+出力仕様:
+厳密JSON
 """
 
     try:
         messages = [
-            SystemMessage(
-                content="あなたは正確なテスト結果判定を行うエキスパートです。"
-            ),
+            SystemMessage(content="あなたは正確なテスト結果判定を行うエキスパートです。JSONのみ返答。"),
             HumanMessage(content=evaluation_prompt),
         ]
+        structured_llm = llm.with_structured_output(EvaluationResult)
+        eval_struct: EvaluationResult = await structured_llm.ainvoke(messages)
 
-        evaluation_result = await llm.ainvoke(messages)
-        evaluation_content = evaluation_result.content.strip().upper()
+        status = eval_struct.status
+        reason = eval_struct.reason.strip()
 
-        # 判定結果の解析
-        if "PASS" in evaluation_content and "SKIP" not in evaluation_content:
-            print(Fore.GREEN + f"Re-Evaluation Content: {evaluation_content}")
-            return f"{response}\n再判定結果: {evaluation_content}"
-        else:
-            print(Fore.RED + f"Re-Evaluation Content: {evaluation_content}")
-            return (
-                f"{response}\n{SKIPPED_STATS_RESULT}\n再判定結果: {evaluation_content}"
-            )
+        allure.attach(
+            f"Status: {status}\nReason:\n{reason}",
+            name="🧪 評価結果 (Structured)",
+            attachment_type=allure.attachment_type.TEXT
+        )
 
-    except Timeout:
-        elapsed = time.time() - start_time
-        log_openai_timeout_to_allure(
-            location="evaluate_task_result",
-            model="gpt-5",
-            elapsed=elapsed
-        )
-        # タイムアウトの場合は安全側に倒してSKIPにする
-        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API タイムアウト"
-    
-    except RateLimitError as e:
-        log_openai_error_to_allure(
-            error_type="RateLimitError",
-            location="evaluate_task_result",
-            model="gpt-5",
-            error=e
-        )
-        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API レート制限"
-    
-    except AuthenticationError as e:
-        log_openai_error_to_allure(
-            error_type="AuthenticationError",
-            location="evaluate_task_result",
-            model="gpt-5",
-            error=e
-        )
-        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API 認証エラー"
-    
-    except APIConnectionError as e:
-        log_openai_error_to_allure(
-            error_type="APIConnectionError",
-            location="evaluate_task_result",
-            model="gpt-5",
-            error=e
-        )
-        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API 接続エラー"
-    
-    except APIError as e:
-        log_openai_error_to_allure(
-            error_type="APIError",
-            location="evaluate_task_result",
-            model="gpt-5",
-            error=e
-        )
-        return f"{response}\n{SKIPPED_STATS_RESULT}\nエラー: OpenAI API エラー"
-        
+        color = Fore.GREEN if status == EXPECTED_STATS_RESULT else Fore.RED
+        print(color + f"[evaluate_task_result] status={status}")
+
+        return f"{status}\n判定理由:\n{reason}"
     except Exception as e:
-        print(f"LLM評価でエラーが発生しました: {e}")
-        # エラーの場合は安全側に倒してSKIPにする
-        return f"{response}\n{SKIPPED_STATS_RESULT}"
+        err_type = type(e).__name__
+        print(Fore.RED + f"[evaluate_task_result] Exception: {err_type}: {e}")
+        allure.attach(
+            f"Exception Type: {err_type}\nLocation: evaluate_task_result\nMessage: {e}",
+            name="❌ evaluate_task_result Exception",
+            attachment_type=allure.attachment_type.TEXT
+        )
+        log_openai_error_to_allure(
+            error_type=err_type,
+            location="evaluate_task_result",
+            model=model,
+            error=e
+        )
+        return f"{SKIPPED_STATS_RESULT}\n判定理由: 評価中エラー ({err_type})"
 
 
 # --- ヘルパー関数: ロケーター情報整形 ---
@@ -381,6 +332,7 @@ class PlanExecute(TypedDict):
 # --- プランモデル ---
 class Plan(BaseModel):
     steps: List[str] = Field(description="実行すべき手順の一覧（順序通りに並べる）")
+    reasoning: Optional[str] = Field(default=None, description="このステップ列を選択した根拠の要約（100〜400文字程度）")
 
 
 # --- 応答モデル ---
@@ -393,41 +345,231 @@ class Act(BaseModel):
         description="実行するアクション。ユーザーに応答する場合はResponse、さらにツールを使用してタスクを実行する場合はPlanを使用してください。"
     )
 
+class DecisionResult(BaseModel):
+    # pattern指定によるフォーマットエラー発生の可能性があるため、Literalで厳密化し安全側に変更
+    decision: Literal["PLAN", "RESPONSE"] = Field(description="次に返すべきアクション種別 (PLAN|RESPONSE)")
+    reason: str = Field(description="判断理由（1〜200文字程度）")
+
+class EvaluationResult(BaseModel):
+    """テスト結果評価の構造化出力モデル
+
+    status: EXPECTED_STATS_RESULT (合格) か SKIPPED_STATS_RESULT (要目視確認)
+    reason: 判定根拠（手順整合性 / 要素根拠 / 不足点 / 画像評価有無などを含める）
+    """
+    status: Literal["EXPECTED_STATS_RESULT", "SKIPPED_STATS_RESULT"] = Field(description="判定結果ステータス")
+    reason: str = Field(description="詳細な判定理由（100〜600文字程度。根拠要素/手順対応/不足点/改善提案を含め可）")
+
+
+# --- Multi-stage Replanner (for mini models) ---
+class MultiStageReplanner:
+    """3段階に分けてreplanを実行するクラス（miniモデル用）"""
+    
+    def __init__(self, llm, knowhow: str):
+        self.llm = llm
+        self.knowhow = knowhow
+    
+    async def analyze_state(
+        self,
+        goal: str,
+        original_plan: list,
+        past_steps: list,
+        locator: str,
+        previous_image_url: str = "",
+        current_image_url: str = ""
+    ) -> str:
+        """ステージ1: 画像（前回/現在）とロケーターから現状を把握
+
+        画像がある場合はLLMへマルチモーダルで渡し、差分言及を促す。
+        """
+        prompt_text = f"""
+あなたは画面状態を分析するエキスパートです。
+
+目標:
+{goal}
+
+元の計画ステップ数: {len(original_plan)}
+完了済みステップ数: {len(past_steps)}
+最後の完了ステップ: {past_steps[-1][0] if past_steps else "(なし)"}
+
+
+指示:
+目標が達成されているか否かを、画面のロケータ情報と、前回と現在の画面スクリーンショットを基に判断してください。
+画像差分 / テスト進捗 / 問題兆候 / 主要要素 を分析した結果に加えて、目標が達成されているか否かを判断した理由をロケーター情報と共に詳細に示しなさい。
+
+厳格ルール:
+残り推定ステップ数が1以上であれば、それが省略可能に見えても必ず PLAN を返してください。Response を返してよいのは残り推定ステップ数が0 かつ STATE_SUMMARY から達成根拠（要素確認等）が明確な場合のみです。
+なぜなら、省略可能に見えたとしても、そのステップを反映することがテストの正確性と安全性を高めるからです。
+したがって、"省略" や "不要" といった語で未実行ステップを評価してはいけません。”省略可能”と判断した場合でも、必ずそのステップを実行しなければならない前提でPLANを返してください。
+
+出力形式:
+プレーンテキストで、判断に利用したオブジェクトとそのロケーター情報と共に以下のセクションを含むこと。
+- 画面の変化と差分分析
+- テスト進捗
+- 問題兆候の有無
+- 主要要素の確認状況
+- 目標達成の可否
+- 標達成の可否の理由
+
+現在のロケーター情報:
+{locator}
+"""
+
+        content_blocks: List[Dict[str, Any]] = [{"type": "text", "text": prompt_text}]
+        if previous_image_url:
+            content_blocks.append({"type": "image_url", "image_url": {"url": previous_image_url}})
+        if current_image_url:
+            content_blocks.append({"type": "image_url", "image_url": {"url": current_image_url}})
+
+        # 画像が無い場合はテキストのみ
+        res = await self.llm.ainvoke([HumanMessage(content=content_blocks)])
+        return res.content.strip()
+    
+    async def decide_action(self, goal: str, original_plan: list, past_steps: list, state_summary: str) -> tuple:
+        """ステージ2: Plan/Responseどちらを返すべきか判断（構造化出力）"""
+        remaining_steps = max(len(original_plan) - len(past_steps), 0)
+
+        prompt = f"""あなたは次のアクションを厳密に判断するエキスパートです。
+
+【目標】
+{goal}
+
+【状態要約】
+{state_summary}
+
+【進捗】
+計画ステップ総数: {len(original_plan)} / 完了: {len(past_steps)} / 残り: {remaining_steps}
+
+【判断基準（厳格）】
+1. 残りステップが１以上存在する : decision=PLAN （省略可能に見えても必ず PLAN）
+2. 残りステップが存在せず目標が100%達成済みで追加行動が論理的に一切不要 : decision=RESPONSE
+3. 画面/ロケーターに不整合・エラー兆候がある → decision=PLAN
+
+【厳格ルール】
+残り推定ステップ数が1以上であれば、それが省略可能に見えても必ず PLAN を返してください。Response を返してよいのは残り推定ステップ数が0 かつ STATE_SUMMARY から達成根拠（要素確認等）が明確な場合のみです。
+なぜなら、省略可能に見えたとしても、そのステップを反映することがテストの正確性と安全性を高めるからです。
+したがって、"省略" や "不要" といった語で未実行ステップを評価してはいけません。”省略可能”と判断した場合でも、必ずそのステップを実行しなければならない前提でPLANを返してください。
+
+【出力仕様】
+厳格なJSON
+"""
+
+        messages = [HumanMessage(content=prompt)]
+        structured_llm = self.llm.with_structured_output(DecisionResult)
+        try:
+            result = await structured_llm.ainvoke(messages)
+            decision_norm = result.decision.strip().upper()
+            if decision_norm not in ("PLAN", "RESPONSE"):
+                decision_norm = "PLAN"  # 安全側フォールバック
+            return decision_norm, result.reason.strip()
+        except Exception as e:
+            # 構造化出力失敗時は安全側でPLANを返す
+            print(Fore.RED + f"decide_action構造化出力エラー: {e}")
+            allure.attach(str(e), name="❌ decide_action 構造化出力エラー", attachment_type=allure.attachment_type.TEXT)
+            return "PLAN", "構造化出力エラーのためフォールバック"
+    
+    async def build_plan(self, goal: str, original_plan: list, past_steps: list, state_summary: str) -> Plan:
+        """ステージ3a: 次のPlanを作成"""
+        remaining = original_plan[len(past_steps):]
+        
+        prompt = f"""
+あなたは実行計画を作成するエキスパートです。
+
+目標:
+{goal}
+
+現在の状態要約:
+{state_summary}
+
+完了済みステップ数: {len(past_steps)}
+
+残りの候補ステップ:
+{remaining}
+
+ノウハウ:   
+{self.knowhow}
+
+タスク:
+目標達成のために次に実行すべきステップを1〜5個作成してください。
+ - 可能なら既存未完了ステップを再利用し重複を避けること
+ - ステップを選択した根拠（進捗・画面要素・残り目標）を簡潔に言語化すること
+- 現在の状態を考慮すること
+- 不要なステップは追加しない
+- 各ステップは具体的で実行可能なこと
+
+出力形式（JSON）:
+厳密なJSON形式
+"""
+        
+        messages = [HumanMessage(content=prompt)]
+        structured_llm = self.llm.with_structured_output(Plan)
+        plan = await structured_llm.ainvoke(messages)
+        return plan
+    
+    async def build_response(self, goal: str, past_steps: list, state_summary: str) -> Response:
+        """ステージ3b: 完了Responseを作成"""
+        prompt = f"""あなたはタスク完了報告を作成するエキスパートです。
+
+【目標】
+{goal}
+
+【現在の状態要約】
+{state_summary}
+
+【完了済みステップ】
+{len(past_steps)}個のステップを完了
+
+【タスク】
+タスクの完了を報告してください。以下を含めること：
+1. 完了理由（1〜3行）
+2. 目標が達成されていることの根拠
+3. 最後の行に必ず {EXPECTED_STATS_RESULT} を単独で記載
+
+出力形式:
+- テキストでタスク完了の理由と根拠を詳細に記述する
+- 最後の行に {EXPECTED_STATS_RESULT} を追記する
+"""
+        
+        messages = [HumanMessage(content=prompt)]
+        structured_llm = self.llm.with_structured_output(Response)
+        resp = await structured_llm.ainvoke(messages)
+        return resp
+
 
 # --- シンプルなプランナークラス ---
 class SimplePlanner:
     """テスト用のシンプルなプランナー"""
 
-    def __init__(self, pre_action_results: str = "", knowhow: str = KNOWHOW_INFO):
+    def __init__(self, pre_action_results: str = "", knowhow: str = KNOWHOW_INFO, multi_stage: bool = False, model_name: str = "gpt-4.1"):
         self.llm = ChatOpenAI(
-            model="gpt-4.1",
+            model=model_name,
             temperature=0,
             timeout=OPENAI_TIMEOUT,
             max_retries=OPENAI_MAX_RETRIES
         )
         self.pre_action_results = pre_action_results
         self.knowhow = knowhow  # ノウハウ情報を保持
+        self.multi_stage = multi_stage  # Multi-stage モード
+        self.model_name = model_name
+        
+        # Multi-stage用のreplanner初期化
+        if multi_stage:
+            self.replanner = MultiStageReplanner(self.llm, knowhow)
+            print(Fore.CYAN + f"🔀 Multi-stage replan モード有効 (model: {model_name})")
 
     async def create_plan(
         self, user_input: str, locator: str = "", image_url: str = ""
     ) -> Plan:
-        start_time = time.time()
         
-        content = f"""与えられた目標に対して、シンプルなステップバイステップの計画を作成してください。
-この計画は、正しく実行されれば正解を得られる個別のタスクで構成される必要があります。
-不要なステップは追加しないでください。最終ステップの結果が最終的な答えとなります。
-各ステップに必要な情報がすべて含まれていることを確認し、ステップを飛ばさないでください。
-
-目標: {user_input}
-実行済みのアクション結果: {self.pre_action_results}"""
+        content = """与えられた目標に対して、シンプルかつ必要最小限のステップバイステップ計画を作成してください。
+    この計画は、正しく実行されれば期待結果を得られる個別のタスクで構成される必要があります。
+    不要・重複・曖昧・推測的なステップは入れないでください。最終ステップの結果が最終的な答えとなります。
+    各ステップに必要十分な情報（対象要素/操作/条件）が含まれていることを確認し、省略や飛ばしを行わないでください。
+    また、なぜそのステップ列が最適かを短く根拠説明してください。
+    """
 
         if locator:
-            # LLMには生のロケーター情報を渡す
-            content += f"\n\n画面ロケーター情報: {locator}"
-            
             # ログとAllureには整形したロケーター情報を出力
             formatted_locator = format_locator_info(locator)
-            print(Fore.CYAN + formatted_locator[:200] + "..." if len(formatted_locator) > 200 else Fore.CYAN + formatted_locator)
             allure.attach(
                 formatted_locator,
                 name="📍 create_plan: ロケーター情報（整形済み）",
@@ -436,18 +578,37 @@ class SimplePlanner:
         
         # 制約・ルールは最後に配置（最も重要な情報として強調）
         content += f"\n\n{self.knowhow}"
+        print(Fore.CYAN + f"\n\n\n\nSystem Message for create_plan:\n{content}\n")
 
         messages = [SystemMessage(content=content)]
 
+        human_message_content = f"""
+目標: 
+{user_input}
+
+指示: 
+現時点のデバイスのスクリーンの状態を、次のロケータ情報とスクリーンショットの２つを突き合わせて解析し、目標達成のための計画を作成しなさい
+
+出力形式:
+厳密なJSON形式
+
+現在のロケーター情報:
+{locator}
+"""
+        print(Fore.CYAN + f"\n\n\n\nHuman Message for create_plan:\n{human_message_content[:500]} ...\n")
+        
         if image_url:
             messages.append(
                 HumanMessage(
                     content=[
                         {
                             "type": "text",
-                            "text": "この画面に基づいて計画を作成してください。",
+                            "text": human_message_content,
                         },
-                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {   
+                            "type": "image_url", 
+                            "image_url": {"url": image_url}
+                        },
                     ]
                 )
             )
@@ -459,47 +620,36 @@ class SimplePlanner:
         try:
             structured_llm = self.llm.with_structured_output(Plan)
             plan = await structured_llm.ainvoke(messages)
+
+            # reasoningのログ保存
+            try:
+                log_entry = {
+                    "timestamp": time.time(),
+                    "goal": user_input,
+                    "steps": plan.steps,
+                    "reasoning": plan.reasoning,
+                    "model": self.llm.model_name
+                }
+                log_path = os.path.join(os.getcwd(), "plan_reasoning_log.jsonl")
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            except Exception as log_err:
+                print(Fore.YELLOW + f"⚠️ reasoningログ保存失敗: {log_err}")
+
+            if plan.reasoning:
+                allure.attach(plan.reasoning, name="🧠 Plan Reasoning", attachment_type=allure.attachment_type.TEXT)
             return plan
-            
-        except Timeout:
-            elapsed = time.time() - start_time
-            log_openai_timeout_to_allure(
-                location="SimplePlanner.create_plan",
-                model=self.llm.model_name,
-                elapsed=elapsed
+        except Exception as e:
+            # 単一の例外処理: 例外種別と場所のみログ/Allureに記録
+            err_type = type(e).__name__
+            print(Fore.RED + f"[create_plan] Exception: {err_type}: {e}")
+            allure.attach(
+                f"Exception Type: {err_type}\nLocation: SimplePlanner.create_plan\nMessage: {e}",
+                name="❌ create_plan Exception",
+                attachment_type=allure.attachment_type.TEXT
             )
-            raise
-        
-        except RateLimitError as e:
             log_openai_error_to_allure(
-                error_type="RateLimitError",
-                location="SimplePlanner.create_plan",
-                model=self.llm.model_name,
-                error=e
-            )
-            raise
-        
-        except AuthenticationError as e:
-            log_openai_error_to_allure(
-                error_type="AuthenticationError",
-                location="SimplePlanner.create_plan",
-                model=self.llm.model_name,
-                error=e
-            )
-            raise
-        
-        except APIConnectionError as e:
-            log_openai_error_to_allure(
-                error_type="APIConnectionError",
-                location="SimplePlanner.create_plan",
-                model=self.llm.model_name,
-                error=e
-            )
-            raise
-        
-        except APIError as e:
-            log_openai_error_to_allure(
-                error_type="APIError",
+                error_type=err_type,
                 location="SimplePlanner.create_plan",
                 model=self.llm.model_name,
                 error=e
@@ -513,13 +663,70 @@ class SimplePlanner:
         image_url: str = "",
         previous_image_url: str = "",
     ) -> Act:
-        start_time = time.time()
         
         system_content = f"""あなたは計画の再評価と次のステップ決定を行うエキスパートです。
 以下のノウハウに従ってタスクを遂行してください。
 
 {self.knowhow}"""
 
+        # --- Multi-stage モード分岐 ---
+        if self.multi_stage:
+            try:
+                print(Fore.CYAN + "🔀 Multi-stage replan: ステージ1（状態分析）")
+                state_summary = await self.replanner.analyze_state(
+                    goal=state["input"],
+                    original_plan=state["plan"],
+                    past_steps=state["past_steps"],
+                    locator=locator,
+                    previous_image_url=previous_image_url,
+                    current_image_url=image_url
+                )
+                print(Fore.CYAN + f"状態要約:\n{state_summary}")
+                allure.attach(state_summary, name="🔍 状態分析結果", attachment_type=allure.attachment_type.TEXT)
+                
+                print(Fore.CYAN + "🔀 Multi-stage replan: ステージ2（アクション判定）")
+                decision, reason = await self.replanner.decide_action(
+                    goal=state["input"],
+                    original_plan=state["plan"],
+                    past_steps=state["past_steps"],
+                    state_summary=state_summary
+                )
+                print(Fore.CYAN + f"判定結果: {decision}\n理由: {reason}")
+                allure.attach(f"DECISION: {decision}\n{reason}", name="⚖️ アクション判定", attachment_type=allure.attachment_type.TEXT)
+                
+                print(Fore.CYAN + "🔀 Multi-stage replan: ステージ3（出力生成）")
+                if decision == "RESPONSE":
+                    response = await self.replanner.build_response(
+                        goal=state["input"],
+                        past_steps=state["past_steps"],
+                        state_summary=state_summary
+                    )
+                    print(Fore.GREEN + f"✅ Response生成完了: {response.response[:100]}...")
+                    return Act(action=response)
+                else:
+                    plan = await self.replanner.build_plan(
+                        goal=state["input"],
+                        original_plan=state["plan"],
+                        past_steps=state["past_steps"],
+                        state_summary=state_summary
+                    )
+                    print(Fore.YELLOW + f"📋 Plan生成完了: {len(plan.steps)}ステップ")
+                    return Act(action=plan)
+            
+            except Exception as e:
+                print(Fore.RED + f"⚠️ Multi-stage replan エラー: {e}")
+                allure.attach(f"Multi-stage replan エラー: {e}", name="❌ Multi-stage エラー", attachment_type=allure.attachment_type.TEXT)
+                # フォールバック: 残りのステップを返す
+                remaining_steps = state["plan"][len(state["past_steps"]):]
+                if remaining_steps:
+                    fallback_plan = Plan(steps=remaining_steps)
+                    print(Fore.YELLOW + f"🔄 フォールバック: 残り{len(remaining_steps)}ステップを返却")
+                    return Act(action=fallback_plan)
+                else:
+                    fallback_response = Response(response=f"エラー発生のため処理を中断します: {e}\n\n{EXPECTED_STATS_RESULT}")
+                    return Act(action=fallback_response)
+        
+        # --- 従来の単発モード ---
         user_content = f"""あなたの目標: {state["input"]}
 元の計画: {str(state["plan"])}
 現在完了したステップ: {str(state["past_steps"])}
@@ -541,7 +748,6 @@ class SimplePlanner:
             
             # ログとAllureには整形したロケーター情報を出力
             formatted_locator = format_locator_info(locator)
-            print(Fore.CYAN + (formatted_locator[:200] + "..." if len(formatted_locator) > 200 else formatted_locator))
             allure.attach(
                 formatted_locator,
                 name="📍 replan: ロケーター情報（整形済み）",
@@ -609,46 +815,16 @@ class SimplePlanner:
             structured_llm = self.llm.with_structured_output(Act)
             act = await structured_llm.ainvoke(messages)
             return act
-            
-        except Timeout:
-            elapsed = time.time() - start_time
-            log_openai_timeout_to_allure(
-                location="SimplePlanner.replan",
-                model=self.llm.model_name,
-                elapsed=elapsed
+        except Exception as e:
+            err_type = type(e).__name__
+            print(Fore.RED + f"[replan] Exception: {err_type}: {e}")
+            allure.attach(
+                f"Exception Type: {err_type}\nLocation: SimplePlanner.replan\nMessage: {e}",
+                name="❌ replan Exception",
+                attachment_type=allure.attachment_type.TEXT
             )
-            raise
-        
-        except RateLimitError as e:
             log_openai_error_to_allure(
-                error_type="RateLimitError",
-                location="SimplePlanner.replan",
-                model=self.llm.model_name,
-                error=e
-            )
-            raise
-        
-        except AuthenticationError as e:
-            log_openai_error_to_allure(
-                error_type="AuthenticationError",
-                location="SimplePlanner.replan",
-                model=self.llm.model_name,
-                error=e
-            )
-            raise
-        
-        except APIConnectionError as e:
-            log_openai_error_to_allure(
-                error_type="APIConnectionError",
-                location="SimplePlanner.replan",
-                model=self.llm.model_name,
-                error=e
-            )
-            raise
-        
-        except APIError as e:
-            log_openai_error_to_allure(
-                error_type="APIError",
+                error_type=err_type,
                 location="SimplePlanner.replan",
                 model=self.llm.model_name,
                 error=e
@@ -736,7 +912,18 @@ def create_workflow_functions(
             
             # ログとAllureには整形したロケーター情報を出力
             formatted_locator = format_locator_info(locator)
-            print(Fore.CYAN + f"\n[Execute Step]{formatted_locator[:200]}..." if len(formatted_locator) > 200 else Fore.CYAN + f"\n[Execute Step]{formatted_locator}")
+                        # Allure添付（整形済み）
+            allure.attach(
+                formatted_locator,
+                name="📍 execute_step: ロケーター情報（整形済み）",
+                attachment_type=allure.attachment_type.TEXT
+            )
+            if image_url:
+                allure.attach(
+                    base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
+                    name="Execute Step: Current Screen",
+                    attachment_type=allure.attachment_type.JPG,
+                )
             
             # タスクにロケーター情報と画像相互補完の指示を含める（LLMには生データを渡す）
             task_formatted = f"""以下の計画について: {plan_str}
@@ -758,19 +945,6 @@ def create_workflow_functions(
 
 画面ロケーター情報:
 {locator}"""
-            
-            # Allure添付（整形済み）
-            allure.attach(
-                formatted_locator,
-                name="📍 execute_step: ロケーター情報（整形済み）",
-                attachment_type=allure.attachment_type.TEXT
-            )
-            if image_url:
-                allure.attach(
-                    base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="Execute Step: Current Screen",
-                    attachment_type=allure.attachment_type.JPG,
-                )
             
             try:
                 # 画像がある場合はマルチモーダルメッセージとして送信
@@ -929,18 +1103,6 @@ def create_workflow_functions(
                     screenshot_tool, generate_locators
                 )
 
-                # 前回画像と現在画像を使ってリプラン
-                output = await planner.replan(
-                    state, locator, image_url, previous_image_url
-                )
-
-                # 現在画像を次回用にキャッシュに保存
-                image_cache["previous_image_url"] = image_url
-                print(
-                    Fore.YELLOW
-                    + f"Replanner Output (replan #{current_replan_count + 1}): {output}"
-                )
-
                 # 前回画像がある場合は比較用として添付
                 if previous_image_url:
                     allure.attach(
@@ -957,6 +1119,19 @@ def create_workflow_functions(
                     name="Current Screenshot (After Action)",
                     attachment_type=allure.attachment_type.JPG,
                 )
+
+                # 前回画像と現在画像を使ってリプラン
+                output = await planner.replan(
+                    state, locator, image_url, previous_image_url
+                )
+
+                # 現在画像を次回用にキャッシュに保存
+                image_cache["previous_image_url"] = image_url
+                print(
+                    Fore.YELLOW
+                    + f"Replanner Output (replan #{current_replan_count + 1}): {output}"
+                )
+
                 if isinstance(output.action, Response):
                     allure.attach(
                         output.action.response,
@@ -1156,8 +1331,25 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
 
             agent_executor = create_react_agent(llm, tools, prompt=prompt)
 
-            # プランナーを作成（カスタムknowhowを渡す）
-            planner = SimplePlanner(pre_action_results, knowhow)
+            # 環境変数でmulti-stageモード判定
+            use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
+            
+            if use_mini_model:
+                print(Fore.CYAN + "🔀 Multi-stage replan モードで起動（gpt-4.1-mini使用）")
+                planner = SimplePlanner(
+                    pre_action_results, 
+                    knowhow, 
+                    multi_stage=True, 
+                    model_name="gpt-4.1-mini"
+                )
+            else:
+                print(Fore.CYAN + "📝 通常replanモードで起動（gpt-4.1使用）")
+                planner = SimplePlanner(
+                    pre_action_results, 
+                    knowhow, 
+                    multi_stage=False, 
+                    model_name="gpt-4.1"
+                )
 
             # LLMに渡されるknowhow情報を表示
             print(Fore.MAGENTA + "=" * 60)
