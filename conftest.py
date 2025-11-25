@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from colorama import Fore, init
 
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langgraph.graph import StateGraph, START, END
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
@@ -1327,7 +1327,7 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
             )
             prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。\n{knowhow}\n"""
 
-            agent_executor = create_react_agent(llm, tools, prompt=prompt)
+            agent_executor = create_agent(llm, tools, system_prompt=prompt)
 
 
             

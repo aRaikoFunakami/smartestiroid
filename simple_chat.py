@@ -1,7 +1,7 @@
 import asyncio
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from event_logger import EventLogger
 
@@ -26,10 +26,10 @@ async def main():
         tools = await load_mcp_tools(session)
         print(f"取得ツール数: {len(tools)}")
         llm = init_chat_model(model="gpt-4o", temperature=0)
-        agent = create_react_agent(
+        agent = create_agent(
             model=llm,
             tools=tools,
-            prompt=(
+            system_prompt=(
                 "あなたはAppiumテストエージェントです。ユーザーの指示に従い、Androidデバイスを操作してください。"
             )
         )

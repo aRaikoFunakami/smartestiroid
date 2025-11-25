@@ -2,7 +2,7 @@ import asyncio
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.tools import Tool
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 
 SERVER_CONFIG = {
@@ -28,10 +28,10 @@ async def main():
 
         # LangChain ReAct Agentの作成
         llm = init_chat_model(model="gpt-4o", temperature=0)
-        agent = create_react_agent(
+        agent = create_agent(
             model=llm,
             tools=tools,
-            prompt="あなたはAppiumテストエージェントです。select_platform→create_session→generate_locatorsの順でAndroid画面解析を自動で行ってください。"
+            system_prompt="あなたはAppiumテストエージェントです。select_platform→create_session→generate_locatorsの順でAndroid画面解析を自動で行ってください。"
         )
 
         # エージェントに指示を与える
