@@ -19,6 +19,10 @@ import json
 import os
 import asyncio
 import time
+
+from appium_tools import appium_driver, appium_tools
+from appium_tools.token_counter import TiktokenCountCallback
+
 # 不要となった詳細例外型や時間計測は簡素化のため削除
 
 capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
@@ -33,15 +37,24 @@ SKIPPED_STATS_RESULT = "SKIPPED_STATS_RESULT"
 
 # Knowhow information for all LLMs
 KNOWHOW_INFO = """
-【重要な前提条件】
-* 事前に select_platform と create_session を実行済みなので、再度実行してはいけません
+重要な前提条件:
+* 事前に appium とは接続されています
+* アプリ起動時にプライバシーポリシーが表示された場合、同意操作を行ってください
+* アプリ起動時にディスクリーマーポリシーが表示された場合、同意操作を行ってください
+* 必要に応じてスクロール操作でポリシーを全文表示させてから同意してください
+* アプリ起動時に初期設定ダイアログが表示された場合、適切に対応してください
+* アプリ起動時に広告ダイアログが表示された場合、閉じる操作を行ってください
 
-【ツール使用のルール - 必ず守ること】
+ツール使用のルール - 必ず守ること:
 * アプリの操作は、必ずツールを使用して行いなさい
 * アプリの起動や終了も、必ずツールを使用して行いなさい
-* アプリ実行/起動: appium_activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップで良い)
-* アプリ終了: appium_terminate_app を使用せよ
-* 入力確定: appium_press_enter を使用せよ
+* アプリ実行/起動: activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップで良い)
+* アプリ終了: terminate_app を使用せよ
+* 入力確定: press_keycode で <Enter> を使用せよ
+
+禁止事項:
+* アカウント情報の入力やログイン操作は行わないでください
+* 新しいアカウントの作成や登録は行わないでください
 """
 
 SERVER_CONFIG = {
@@ -296,32 +309,6 @@ async def evaluate_task_result(
         return f"{SKIPPED_STATS_RESULT}\n判定理由: 評価中エラー ({err_type})"
 
 
-# --- ヘルパー関数: ロケーター情報整形 ---
-def format_locator_info(locator: str) -> str:
-    """ロケーター情報をJSONとして見やすく整形する
-    
-    Args:
-        locator: 生のロケーター情報文字列（JSON形式）
-    
-    Returns:
-        整形されたJSON文字列
-    """
-    if not locator or locator.strip() == "":
-        return "ロケーター情報なし"
-    
-    try:
-        import json
-        locator_data = json.loads(locator)
-        # インデント付きで整形
-        formatted = json.dumps(locator_data, indent=2, ensure_ascii=False)
-        return f"\n画面ロケーター情報（整形済み）:\n{formatted}"
-        
-    except json.JSONDecodeError:
-        return f"ロケーター情報のJSON解析エラー\n生データ: {locator[:200]}..."
-    except Exception as e:
-        return f"ロケーター情報の整形エラー: {str(e)}\n生データ: {locator[:200]}..."
-
-
 # --- 状態定義 ---
 class PlanExecute(TypedDict):
     input: str
@@ -573,15 +560,6 @@ class SimplePlanner:
     各ステップに必要十分な情報（対象要素/操作/条件）が含まれていることを確認し、省略や飛ばしを行わないでください。
     また、なぜそのステップ列が最適かを短く根拠説明してください。
     """
-
-        if locator:
-            # ログとAllureには整形したロケーター情報を出力
-            formatted_locator = format_locator_info(locator)
-            allure.attach(
-                formatted_locator,
-                name="📍 create_plan: ロケーター情報（整形済み）",
-                attachment_type=allure.attachment_type.TEXT
-            )
         
         # 制約・ルールは最後に配置（最も重要な情報として強調）
         content += f"\n\n{self.knowhow}"
@@ -602,7 +580,7 @@ class SimplePlanner:
 現在のロケーター情報:
 {locator}
 """
-        print(Fore.CYAN + f"\n\n\n\nHuman Message for create_plan:\n{human_message_content[:500]} ...\n")
+        print(Fore.CYAN + f"\n\nHuman Message for create_plan:\n{human_message_content[:500]} ...\n")
         
         if image_url:
             messages.append(
@@ -627,10 +605,8 @@ class SimplePlanner:
         try:
             structured_llm = self.llm.with_structured_output(Plan)
             plan = await structured_llm.ainvoke(messages)
-
-            if plan.reasoning:
-                allure.attach(plan.reasoning, name="🧠 Plan Reasoning", attachment_type=allure.attachment_type.TEXT)
             return plan
+        
         except Exception as e:
             # 単一の例外処理: 例外種別と場所のみログ/Allureに記録
             err_type = type(e).__name__
@@ -739,9 +715,8 @@ class SimplePlanner:
             user_content += f"\n\n現在の画面ロケーター情報: {locator}"
             
             # ログとAllureには整形したロケーター情報を出力
-            formatted_locator = format_locator_info(locator)
             allure.attach(
-                formatted_locator,
+                locator,
                 name="📍 replan: ロケーター情報（整形済み）",
                 attachment_type=allure.attachment_type.TEXT
             )
@@ -903,10 +878,8 @@ def create_workflow_functions(
             )
             
             # ログとAllureには整形したロケーター情報を出力
-            formatted_locator = format_locator_info(locator)
-                        # Allure添付（整形済み）
             allure.attach(
-                formatted_locator,
+                locator,
                 name="📍 execute_step: ロケーター情報（整形済み）",
                 attachment_type=allure.attachment_type.TEXT
             )
@@ -1015,24 +988,46 @@ def create_workflow_functions(
                 locator, image_url = await generate_screen_info(
                     screenshot_tool, generate_locators
                 )
+
+                if locator:
+                    # ログとAllureには整形したロケーター情報を出力
+                    allure.attach(
+                        locator,
+                        name="📍 create_plan: ロケーター情報",
+                        attachment_type=allure.attachment_type.TEXT
+                    )
+
+                if image_url:
+                    allure.attach(
+                        base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
+                        name="Screenshot before Planning",
+                        attachment_type=allure.attachment_type.JPG,
+                    )
+
                 plan = await planner.create_plan(state["input"], locator, image_url)
                 print(Fore.GREEN + f"生成された計画: {plan}")
-                allure.attach(
-                    base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="Screenshot before Planning",
-                    attachment_type=allure.attachment_type.JPG,
-                )
+
+
+
                 allure.attach(
                     str(plan.steps),
-                    name="Plan",
+                    name="🎯Plan",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+
+                allure.attach(
+                    plan.reasoning, 
+                    name="🧠 Plan Reasoning", 
+                    attachment_type=allure.attachment_type.TEXT
+                )
+
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f}秒",
-                    name="Plan Step Time",
+                    name="⏱️Plan Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+
                 # 初回画像をキャッシュに保存
                 image_cache["previous_image_url"] = image_url
 
@@ -1079,7 +1074,7 @@ def create_workflow_functions(
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f}秒",
-                    name="Replan Step Time",
+                    name="🧠 Replan Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 return {
@@ -1094,6 +1089,14 @@ def create_workflow_functions(
                 locator, image_url = await generate_screen_info(
                     screenshot_tool, generate_locators
                 )
+
+                if locator:
+                    # ログとAllureには整形したロケーター情報を出力
+                    allure.attach(
+                        locator,
+                        name="📍 create_plan: ロケーター情報",
+                        attachment_type=allure.attachment_type.TEXT
+                    )
 
                 # 前回画像がある場合は比較用として添付
                 if previous_image_url:
@@ -1155,7 +1158,7 @@ def create_workflow_functions(
                     elapsed = time.time() - start_time
                     allure.attach(
                         f"{elapsed:.3f}秒",
-                        name="Replan Step Time",
+                        name="⏱️Replan Step Time",
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     return {
@@ -1165,13 +1168,13 @@ def create_workflow_functions(
                 else:
                     allure.attach(
                         str(output.action.steps),
-                        name="Replan Steps",
+                        name="🧠 Replan Steps",
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     elapsed = time.time() - start_time
                     allure.attach(
                         f"{elapsed:.3f}秒",
-                        name="Replan Step Time",
+                        name="⏱️Replan Step Time",
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     return {
@@ -1183,7 +1186,7 @@ def create_workflow_functions(
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f}秒",
-                    name="Replan Step Time",
+                    name="⏱️Replan Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 # エラーの場合は終了
@@ -1210,75 +1213,56 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
         no_reset: appium:noResetの設定値。True（デフォルト）はリセットなし、Falseはリセットあり。
         knowhow: ノウハウ情報。デフォルトはKNOWHOW_INFO、カスタムknowhowを渡すことも可能。
     """
+    from appium.options.android import UiAutomator2Options
+    options = UiAutomator2Options()
+    capabilities = {}
 
     try:
-        client = MultiServerMCPClient(SERVER_CONFIG)
-        async with client.session("jarvis-appium-sse") as session:
+        with open(capabilities_path, "r") as f:
+            capabilities = json.load(f)
+
+            # 任意の追加設定
+            capabilities.update({
+                "appium:waitForIdleTimeout": 1000, # 高速化のため待機タイムアウトを1秒に設定
+                "appium:noReset": no_reset, # noResetがTrueならアプリをリセットしない
+                "appium:appWaitActivity": "*", # すべてのアクティビティを待機
+                "appium:autoGrantPermissions": True, # 権限を自動付与
+            })
+
+            # Apply all capabilities from the loaded dictionary
+            for key, value in capabilities.items():
+                # Set each capability dynamically
+                options.set_capability(key, value)
+    except FileNotFoundError:
+        print(
+            f"警告: {capabilities_path} が見つかりません。"
+        )
+        raise
+
+    except json.JSONDecodeError:
+        print(
+            f"警告: {capabilities_path} のJSON形式が無効です。デフォルト設定で実行します。"
+        )
+        raise
+
+    
+
+    try:
+        async with appium_driver(options) as driver:
             # ツールを取得
-            tools = await load_mcp_tools(session)
             pre_action_results = ""
 
-            # 必要なツールを取得
-            select_platform = next(t for t in tools if t.name == "select_platform")
-            create_session = next(t for t in tools if t.name == "create_session")
-            screenshot_tool = next(t for t in tools if t.name == "appium_screenshot")
-            generate_locators = next(t for t in tools if t.name == "generate_locators")
-            activate_app = next(t for t in tools if t.name == "appium_activate_app")
-            terminate_app = next(t for t in tools if t.name == "appium_terminate_app")
-
-            # プラットフォーム選択とセッション作成
-            print("select_platform 実行...")
-            platform = await select_platform.ainvoke({"platform": "android"})
-            print("select_platform結果:", platform)
-            pre_action_results += (
-                f"select_platform ツールを呼び出しました: {platform}\n"
-            )
-
-            print("create_session 実行...")
-            print(f"appium:noReset設定: {no_reset}")
-
-            try:
-                with open(capabilities_path, "r") as f:
-                    capabilities = json.load(f)
-
-                # capabilitiesをベースにして必要な設定を上書き
-                session_params = {
-                    "platform": "android",
-                    "capabilities": capabilities  # ネストさせる
-                }
-
-                # 任意の追加設定
-                session_params["capabilities"].update({
-                    "appium:waitForIdleTimeout": 1000, # 高速化のため待機タイムアウトを1秒に設定
-                    "appium:noReset": no_reset, # noResetがTrueならアプリをリセットしない
-                    "appium:appWaitActivity": "*", # すべてのアクティビティを待機
-                    "appium:autoGrantPermissions": True, # 権限を自動付与
-                })
-                print(f"create_sessionパラメータ: {json.dumps(session_params, indent=2, ensure_ascii=False)}")
-                session_result = await create_session.ainvoke(session_params)
-            except FileNotFoundError:
-                print(
-                    f"警告: {capabilities_path} が見つかりません。デフォルト設定で実行します。"
-                )
-                session_result = await create_session.ainvoke(
-                    {"platform": "android", "appium:noReset": no_reset}
-                )
-            except json.JSONDecodeError:
-                print(
-                    f"警告: {capabilities_path} のJSON形式が無効です。デフォルト設定で実行します。"
-                )
-                session_result = await create_session.ainvoke(
-                    {"platform": "android", "appium:noReset": no_reset}
-                )
-
-            print("create_session結果:", session_result)
-            pre_action_results += (
-                f"create_session ツールを呼び出しました: {session_result}\n"
-            )
+            # 必要なツールを取得（リストから名前で検索）
+            tools_list = appium_tools()
+            tools_dict = {tool.name: tool for tool in tools_list}
+            screenshot_tool = tools_dict.get("take_screenshot")
+            generate_locators = tools_dict.get("get_page_source")
+            activate_app = tools_dict.get("activate_app")
+            terminate_app = tools_dict.get("terminate_app")
 
             # noReset=True の場合、appPackageで指定されたアプリを強制起動
             if no_reset:
-                app_package = session_params.get("capabilities", {}).get("appium:appPackage")
+                app_package = capabilities.get("appium:appPackage")
                 if app_package:
                     print(Fore.CYAN + f"noReset=True: アプリを強制起動します (appPackage={app_package})")
                     try:
@@ -1327,7 +1311,7 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
             )
             prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。\n{knowhow}\n"""
 
-            agent_executor = create_agent(llm, tools, system_prompt=prompt)
+            agent_executor = create_agent(llm, appium_tools(), system_prompt=prompt)
 
 
             
