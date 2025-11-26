@@ -4,7 +4,7 @@
     "appium:deviceName": "Android Device",
     "appium:platformVersion": "14",
     "appium:udid": "emulator-5554",
-    "appium:appPackage": "com.android.chrome",
+    "appium:appPackage": "com.access_company.twine4car.videocenter",
     "appium:noReset": true,
     "appium:newCommandTimeout": 300
 }

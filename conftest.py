@@ -21,7 +21,7 @@ import asyncio
 import time
 
 from appium_tools import appium_driver, appium_tools
-from appium_tools.token_counter import TiktokenCountCallback
+from langchain_core.callbacks import BaseCallbackHandler
 
 # 不要となった詳細例外型や時間計測は簡素化のため削除
 
@@ -65,6 +65,76 @@ SERVER_CONFIG = {
 }
 
 init(autoreset=True)
+
+
+class AllureToolCallbackHandler(BaseCallbackHandler):
+    """Allure にツール呼び出し履歴を記録するコールバックハンドラー"""
+    
+    def __init__(self):
+        super().__init__()
+        self.tool_calls = []
+        self.current_step = None
+    
+    def on_tool_start(self, serialized: Dict[str, Any], input_str: str, **kwargs) -> None:
+        """ツール呼び出し開始時"""
+        tool_name = serialized.get("name", "Unknown")
+        timestamp = time.time()
+        
+        # input_str が辞書やオブジェクトの場合は文字列化
+        input_display = str(input_str) if input_str is not None else ""
+        
+        tool_call = {
+            "tool_name": tool_name,
+            "input": input_display,
+            "start_time": timestamp,
+            "end_time": None,
+            "output": None,
+            "error": None,
+        }
+        self.tool_calls.append(tool_call)
+        
+        print(Fore.YELLOW + f"🔧 Tool Start: {tool_name}")
+        print(Fore.YELLOW + f"   Input: {input_display[:200]}...")
+    
+    def on_tool_end(self, output: str, **kwargs) -> None:
+        """ツール呼び出し終了時"""
+        if self.tool_calls:
+            tool_call = self.tool_calls[-1]
+            tool_call["end_time"] = time.time()
+            # output が複雑なオブジェクトの場合は文字列化
+            tool_call["output"] = str(output) if output is not None else None
+            
+            elapsed = tool_call["end_time"] - tool_call["start_time"]
+            print(Fore.GREEN + f"✅ Tool End: {tool_call['tool_name']} ({elapsed:.2f}s)")
+            print(Fore.GREEN + f"   Output: {str(output)[:200]}...")
+    
+    def on_tool_error(self, error: BaseException, **kwargs) -> None:
+        """ツール呼び出しエラー時"""
+        if self.tool_calls:
+            tool_call = self.tool_calls[-1]
+            tool_call["end_time"] = time.time()
+            tool_call["error"] = str(error)
+            
+            elapsed = tool_call["end_time"] - tool_call["start_time"]
+            print(Fore.RED + f"❌ Tool Error: {tool_call['tool_name']} ({elapsed:.2f}s)")
+            print(Fore.RED + f"   Error: {str(error)[:200]}...")
+    
+    def save_to_allure(self, step_name: str = None):
+        """Allure にツール呼び出し履歴を保存"""
+        if not self.tool_calls:
+            return
+        
+        # JSON形式で保存
+        tool_history_json = json.dumps(self.tool_calls, indent=2, ensure_ascii=False)
+        allure.attach(
+            tool_history_json,
+            name="[DEBUG] Tool Calls History",
+            attachment_type=allure.attachment_type.JSON,
+        )
+    
+    def clear(self):
+        """履歴をクリア"""
+        self.tool_calls = []
 
 
 def log_openai_timeout_to_allure(location: str, model: str, elapsed: float, context: dict = None):
@@ -281,12 +351,6 @@ async def evaluate_task_result(
 
         status = eval_struct.status
         reason = eval_struct.reason.strip()
-
-        allure.attach(
-            f"Status: {status}\nReason:\n{reason}",
-            name="🧪 評価結果 (Structured)",
-            attachment_type=allure.attachment_type.TEXT
-        )
 
         color = Fore.GREEN if status == EXPECTED_STATS_RESULT else Fore.RED
         print(color + f"[evaluate_task_result] status={status}")
@@ -860,13 +924,16 @@ def create_workflow_functions(
 
     # ステップ履歴キャッシュ（クロージャ内で管理）
     step_history = {"executed_steps": []}
+    
+    # ツール呼び出し履歴を記録するコールバックハンドラー
+    tool_callback = AllureToolCallbackHandler()
 
     async def execute_step(state: PlanExecute):
-        with allure.step("Action: Execute"):
+        plan = state["plan"]
+        with allure.step(f"Action: Execute [{plan[0][:30] if plan else 'No Step'} ...]"):
             import time
 
             start_time = time.time()
-            plan = state["plan"]
             if not plan:
                 return {"past_steps": [("error", "計画が空です")]}
             plan_str = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan))
@@ -880,13 +947,13 @@ def create_workflow_functions(
             # ログとAllureには整形したロケーター情報を出力
             allure.attach(
                 locator,
-                name="📍 execute_step: ロケーター情報（整形済み）",
+                name="📍ロケーター情報",
                 attachment_type=allure.attachment_type.TEXT
             )
             if image_url:
                 allure.attach(
                     base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="Execute Step: Current Screen",
+                    name="📷Current Screen",
                     attachment_type=allure.attachment_type.JPG,
                 )
             
@@ -920,12 +987,15 @@ def create_workflow_functions(
                                 {"type": "text", "text": task_formatted},
                                 {"type": "image_url", "image_url": {"url": image_url}}
                             ]
-                        )]}
+                        )]},
+                        config={"callbacks": [tool_callback]}
                     )
                 else:
                     agent_response = await agent_executor.ainvoke(
-                        {"messages": [("user", task_formatted)]}
+                        {"messages": [("user", task_formatted)]},
+                        config={"callbacks": [tool_callback]}
                     )
+
                 log_text = f"ステップ '{task}' のエージェント応答: {agent_response['messages'][-1].content}"
                 print(Fore.RED + log_text)
                 allure.attach(
@@ -933,6 +1003,11 @@ def create_workflow_functions(
                     name="Step",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+
+                # ツール呼び出し履歴を Allure に保存
+                tool_callback.save_to_allure(step_name=task)
+                tool_callback.clear()
+
                 allure.attach(
                     agent_response["messages"][-1].content,
                     name="Response",
@@ -941,7 +1016,7 @@ def create_workflow_functions(
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f}秒",
-                    name="Execute Step Time",
+                    name="⏱️Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
@@ -993,21 +1068,19 @@ def create_workflow_functions(
                     # ログとAllureには整形したロケーター情報を出力
                     allure.attach(
                         locator,
-                        name="📍 create_plan: ロケーター情報",
+                        name="📍ロケーター情報",
                         attachment_type=allure.attachment_type.TEXT
                     )
 
                 if image_url:
                     allure.attach(
                         base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                        name="Screenshot before Planning",
+                        name="📷Screenshot before Planning",
                         attachment_type=allure.attachment_type.JPG,
                     )
 
                 plan = await planner.create_plan(state["input"], locator, image_url)
                 print(Fore.GREEN + f"生成された計画: {plan}")
-
-
 
                 allure.attach(
                     str(plan.steps),
@@ -1024,7 +1097,7 @@ def create_workflow_functions(
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f}秒",
-                    name="⏱️Plan Step Time",
+                    name=f"⏱️Plan Step Time : {elapsed:.3f}秒",
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
@@ -1045,7 +1118,7 @@ def create_workflow_functions(
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f}秒",
-                    name="Plan Step Time",
+                    name=f"Plan Step Time : {elapsed:.3f}秒",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 # エラー時はキャッシュをクリア
@@ -1060,11 +1133,11 @@ def create_workflow_functions(
                 }
 
     async def replan_step(state: PlanExecute):
-        with allure.step("Action: Replan"):
+        current_replan_count = state.get("replan_count", 0)
+        with allure.step(f"Action: Replan [Attempt #{current_replan_count+1}]"):
             import time
 
             start_time = time.time()
-            current_replan_count = state.get("replan_count", 0)
             # リプラン回数制限チェック
             if current_replan_count >= max_replan_count:
                 print(
@@ -1094,7 +1167,7 @@ def create_workflow_functions(
                     # ログとAllureには整形したロケーター情報を出力
                     allure.attach(
                         locator,
-                        name="📍 create_plan: ロケーター情報",
+                        name="📍ロケーター情報",
                         attachment_type=allure.attachment_type.TEXT
                     )
 
@@ -1104,14 +1177,14 @@ def create_workflow_functions(
                         base64.b64decode(
                             previous_image_url.replace("data:image/jpeg;base64,", "")
                         ),
-                        name="Previous Screenshot (Before Action)",
+                        name="📷Previous Screenshot (Before Action)",
                         attachment_type=allure.attachment_type.JPG,
                     )
 
                 # 現在画像を添付
                 allure.attach(
                     base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="Current Screenshot (After Action)",
+                    name="📷Current Screenshot (After Action)",
                     attachment_type=allure.attachment_type.JPG,
                 )
 
@@ -1151,7 +1224,7 @@ def create_workflow_functions(
 
                     allure.attach(
                         evaluated_response,
-                        name="Evaluated Response",
+                        name="Final Evalution",
                         attachment_type=allure.attachment_type.TEXT,
                     )
 
@@ -1206,6 +1279,50 @@ def create_workflow_functions(
     return execute_step, plan_step, replan_step, should_end
 
 
+
+async def write_device_info_once(driver=None):
+    """デバイス情報をAllure環境ファイルに書き込む（1回だけ実行）"""    
+    env_file_path = "allure-results/environment.properties"
+    info = {}
+
+    # ファイルが既に存在する場合はスキップ
+    if os.path.exists(env_file_path):
+        return
+
+    try:
+        # capabilities.json から基本情報を取得
+        with open(capabilities_path, "r") as f:
+            info = json.load(f)  
+    except Exception as e:
+        print(f"警告: デバイス情報の取得に失敗しました: {e}")
+
+    # デバイス詳細を driver から取得
+    tools_list = appium_tools()
+    tools_dict = {tool.name: tool for tool in tools_list}
+    get_device_info = tools_dict.get("get_device_info")
+    
+    if get_device_info:
+        info_result = await get_device_info.ainvoke({})
+        # info_result が文字列の場合はパースする
+        if isinstance(info_result, str):
+            for line in info_result.split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    info[key.strip()] = value.strip()
+        elif isinstance(info_result, dict):
+            info = info_result
+    
+    # 環境ファイルに書き込み
+    os.makedirs("allure-results", exist_ok=True)
+    with open(env_file_path, "w") as f:
+        for key, value in info.items():
+            if value:
+                # キーに空白やコロンが含まれる場合はアンダースコアに置換
+                safe_key = key.replace(' ', '_').replace(':', '_')
+                f.write(f"{safe_key}={value}\n")
+
+
+
 async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
     """MCPセッション内でgraphを作成し、セッションを維持しながらyieldする
 
@@ -1213,6 +1330,7 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
         no_reset: appium:noResetの設定値。True（デフォルト）はリセットなし、Falseはリセットあり。
         knowhow: ノウハウ情報。デフォルトはKNOWHOW_INFO、カスタムknowhowを渡すことも可能。
     """
+    
     from appium.options.android import UiAutomator2Options
     options = UiAutomator2Options()
     capabilities = {}
@@ -1227,6 +1345,7 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
                 "appium:noReset": no_reset, # noResetがTrueならアプリをリセットしない
                 "appium:appWaitActivity": "*", # すべてのアクティビティを待機
                 "appium:autoGrantPermissions": True, # 権限を自動付与
+                "appium:dontStopAppOnReset": True, 
             })
 
             # Apply all capabilities from the loaded dictionary
@@ -1249,6 +1368,9 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
 
     try:
         async with appium_driver(options) as driver:
+            # 最初のセッション開始時にデバイス情報を取得して書き込む
+            await write_device_info_once(driver)
+
             # ツールを取得
             pre_action_results = ""
 
@@ -1266,30 +1388,19 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
                 if app_package:
                     print(Fore.CYAN + f"noReset=True: アプリを強制起動します (appPackage={app_package})")
                     try:
-                        activate_result = await activate_app.ainvoke({"id": app_package})
+                        activate_result = await activate_app.ainvoke({"app_id": app_package})
                         print(f"appium_activate_app結果: {activate_result}")
                         pre_action_results += f"appium_activate_app ツールを呼び出しました: {activate_result}\n"
-                        # アプリ起動を待つ（3秒）
                         print("アプリ起動待機中... (3秒)")
                         await asyncio.sleep(3)
-                        print("待機完了")
                     except Exception as e:
                         print(Fore.YELLOW + f"⚠️  appium_activate_app実行エラー: {e}")
-                        # エラーでも継続（アプリが既に起動している可能性）
-                        print("アプリ起動待機中... (3秒)")
-                        await asyncio.sleep(3)
-                        print("待機完了")
                 else:
                     print(Fore.YELLOW + "⚠️  appPackageが指定されていないため、アプリ起動をスキップします")
-                    # アプリの自動起動を待つ（3秒待機）
-                    print("アプリ起動待機中... (3秒)")
-                    await asyncio.sleep(3)
-                    print("待機完了")
             else:
                 # noReset=False の場合は通常通り待機のみ
                 print("アプリ起動待機中... (3秒)")
                 await asyncio.sleep(3)
-                print("待機完了")
 
             print(Fore.GREEN + f"pre_action_results: {pre_action_results}")
 
@@ -1363,26 +1474,21 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
             workflow.add_conditional_edges("replan", should_end, ["agent", END])
             graph = workflow.compile()
 
-            # graphとpast_stepsをyieldして、セッションを維持
+            # graphとpast_stepsをyieldして、セッションを維持    
             try:
                 yield graph
             finally:
-                # テスト終了時にアプリを終了
-                app_package = None
-                try:
-                    with open(capabilities_path, "r") as f:
-                        capabilities = json.load(f)
-                        app_package = capabilities.get("appium:appPackage")
-                except Exception:
-                    pass
-                
-                if app_package:
-                    print(Fore.CYAN + f"テスト終了: アプリを終了します (appPackage={app_package})")
+                # セッション終了前にアプリを終了
+                app_package = capabilities.get("appium:appPackage")
+                dont_stop_app_on_reset = capabilities.get("appium:dontStopAppOnReset")
+                if app_package and not dont_stop_app_on_reset:
+                    print(Fore.CYAN + f"セッション終了: アプリを終了します (appPackage={app_package})")
                     try:
-                        terminate_result = await terminate_app.ainvoke({"id": app_package})
+                        terminate_result = await terminate_app.ainvoke({"app_id": app_package})
                         print(f"appium_terminate_app結果: {terminate_result}")
                     except Exception as e:
                         print(Fore.YELLOW + f"⚠️  appium_terminate_app実行エラー: {e}")
+
     except Exception as e:
         print(Fore.RED + f"agent_sessionでエラー: {e}")
         raise e
