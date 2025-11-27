@@ -48,7 +48,7 @@ KNOWHOW_INFO = """
 ツール使用のルール - 必ず守ること:
 * アプリの操作は、必ずツールを使用して行いなさい
 * アプリの起動や終了も、必ずツールを使用して行いなさい
-* アプリ実行/起動: activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップで良い)
+* アプリ実行/起動: activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップ処理で良い)
 * アプリ終了: terminate_app を使用せよ
 * 入力確定: press_keycode で <Enter> を使用せよ
 
@@ -544,6 +544,7 @@ class MultiStageReplanner:
 
 タスク:
 目標達成のために必要な最適なステップ列を作成してください。以下を必ず守ること：
+- 現在フォアグラウンドで動作しているアプリIDがテストを実施するアプリであることを確認すること
 - ステップを実行できる状態でない場合は、現在の状態を考慮して最適なステップを再構築してください
 - 可能なら既存未完了ステップを再利用し重複を避けること
 - ステップを選択した根拠（進捗・画面要素・残り目標）を簡潔に言語化すること
@@ -1034,6 +1035,7 @@ def create_workflow_functions(
                     "past_steps": [(task, agent_response["messages"][-1].content)],
                 }
             except Exception as e:
+                error_msg = str(e)
                 print(Fore.RED + f"execute_stepでエラー: {e}")
                 elapsed = time.time() - start_time
                 allure.attach(
@@ -1041,18 +1043,25 @@ def create_workflow_functions(
                     name="Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+                
+                allure.attach(
+                    f"エラー詳細:\n{error_msg}\n\nステップ: {task}",
+                    name="❌ Execute Step Error",
+                    attachment_type=allure.attachment_type.TEXT,
+                )
 
                 # エラーも履歴に記録
                 step_history["executed_steps"].append(
                     {
                         "step": task,
-                        "response": f"エラー: {str(e)}",
+                        "response": f"エラー: {error_msg}",
                         "timestamp": time.time(),
                         "success": False,
                     }
                 )
 
-                return {"past_steps": [(task, f"エラー: {str(e)}")]}
+                # エラー発生時はassertで失敗させて次のテストへ
+                assert False, f"ステップ実行中にエラーが発生しました: {error_msg}"
 
     async def plan_step(state: PlanExecute):
         with allure.step("Action: Plan"):
@@ -1323,7 +1332,7 @@ async def write_device_info_once(driver=None):
 
 
 
-async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
+async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = False, knowhow: str = KNOWHOW_INFO):
     """MCPセッション内でgraphを作成し、セッションを維持しながらyieldする
 
     Args:
@@ -1345,7 +1354,7 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
                 "appium:noReset": no_reset, # noResetがTrueならアプリをリセットしない
                 "appium:appWaitActivity": "*", # すべてのアクティビティを待機
                 "appium:autoGrantPermissions": True, # 権限を自動付与
-                "appium:dontStopAppOnReset": True, 
+                "appium:dontStopAppOnReset": dont_stop_app_on_reset, # セッションリセット時にアプリを停止しない
             })
 
             # Apply all capabilities from the loaded dictionary
@@ -1381,6 +1390,7 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
             generate_locators = tools_dict.get("get_page_source")
             activate_app = tools_dict.get("activate_app")
             terminate_app = tools_dict.get("terminate_app")
+            get_current_app = tools_dict.get("get_current_app")
 
             # noReset=True の場合、appPackageで指定されたアプリを強制起動
             if no_reset:
@@ -1402,6 +1412,8 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
                 print("アプリ起動待機中... (3秒)")
                 await asyncio.sleep(3)
 
+            get_current_app_result = await get_current_app.ainvoke({})
+            pre_action_results += f"現在のアクティブアプリ: {get_current_app_result}\n"
             print(Fore.GREEN + f"pre_action_results: {pre_action_results}")
 
             # 環境変数でmulti-stageモード判定
@@ -1487,11 +1499,21 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
                         terminate_result = await terminate_app.ainvoke({"app_id": app_package})
                         print(f"appium_terminate_app結果: {terminate_result}")
                     except Exception as e:
-                        print(Fore.YELLOW + f"⚠️  appium_terminate_app実行エラー: {e}")
+                        error_msg = str(e)
+                        # NoSuchDriverError や session terminated エラーは警告レベルで扱う
+                        if "NoSuchDriverError" in error_msg or "session is either terminated or not started" in error_msg or "session" in error_msg.lower():
+                            print(Fore.YELLOW + f"⚠️  セッションが既に終了しています: {e}")
+                        else:
+                            print(Fore.YELLOW + f"⚠️  appium_terminate_app実行エラー: {e}")
 
     except Exception as e:
-        print(Fore.RED + f"agent_sessionでエラー: {e}")
-        raise e
+        error_msg = str(e)
+        # NoSuchDriverError や session terminated エラーは情報レベルで扱う
+        if "NoSuchDriverError" in error_msg or "session is either terminated or not started" in error_msg:
+            print(Fore.YELLOW + f"⚠️  agent_session: セッションが既に終了しています: {e}")
+        else:
+            print(Fore.RED + f"agent_sessionでエラー: {e}")
+            raise e
     finally:
         print("セッション終了")
 
@@ -1499,9 +1521,10 @@ async def agent_session(no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
 class SmartestiRoid:
     """テスト用のPlan-and-Executeエージェントクラス"""
 
-    def __init__(self, agent_session, no_reset: bool = True, knowhow: str = KNOWHOW_INFO):
+    def __init__(self, agent_session, no_reset: bool = True, dont_stop_app_on_reset: bool = False, knowhow: str = KNOWHOW_INFO):
         self.agent_session = agent_session
         self.no_reset = no_reset
+        self.dont_stop_app_on_reset = dont_stop_app_on_reset
         self.knowhow = knowhow  # ノウハウ情報を保持
 
     async def validate_task(
@@ -1526,7 +1549,7 @@ class SmartestiRoid:
         effective_knowhow = knowhow if knowhow is not None else self.knowhow
 
         # カスタムknowhowを使用する場合、新しいセッションを作成
-        async for graph in self.agent_session(self.no_reset, effective_knowhow):
+        async for graph in self.agent_session(self.no_reset, self.dont_stop_app_on_reset, effective_knowhow):
             # state["input"]には純粋なタスクのみを渡す
             # knowhowは各LLM（SimplePlanner、agent_executor）が既に持っている
             inputs = {"input": task}

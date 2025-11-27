@@ -37,6 +37,13 @@ def create_test_function(case, test_num):
     epic = str(case.get("Epic", "")).strip() or "Android Automation"
     feature = str(case.get("Feature", "")).strip() or "Step Recording"
     story = str(case.get("Story", "")).strip() or "Screenshot and Thoughts Capture"
+    desc = str(case.get("Description", "")).strip()
+    expected = str(case.get("ExpectedResults", "")).strip()
+    description = f"{desc}\n\nExpected Results: {expected}"
+    cid = str(case.get("ID", "")).strip()
+    title = str(case.get("Title", "")).strip()
+    allure_title = f"[{cid}] {title}"
+
     
     @pytest.mark.asyncio
     @pytest.mark.android
@@ -44,6 +51,8 @@ def create_test_function(case, test_num):
     @allure.epic(epic)
     @allure.feature(feature)
     @allure.story(story)
+    @allure.title(allure_title)
+    @allure.description(description)
     async def dynamic_test(custom_knowhow):  # fixtureを引数に追加
         """Run one row from testsheet.csv as a test case."""
         
@@ -53,39 +62,24 @@ def create_test_function(case, test_num):
         print(Fore.CYAN + "=" * 60)
         
         # Extract fields
-        cid = str(case.get("ID", "")).strip()
-        title = str(case.get("Title", "")).strip() or (
-            f"Case {cid}" if cid else "Excel Case"
-        )
-        desc = str(case.get("Description", "")).strip()
-        steps = str(case.get("Step", "")).strip()
-        expected = case.get("ExpectedResults").strip()
+        steps = str(case.get("Step", "")).strip() 
         criteria = str(case.get("Criteria")).strip()
         
         # Reset列の値を取得してno_reset値を決定
-        reset_value = str(case.get("Reset", "")).strip()
         # "Reset"の場合はno_reset=False（リセットあり）、"noReset"の場合はno_reset=True（リセットなし）
+        reset_value = str(case.get("Reset", "")).strip()
         no_reset = reset_value.lower() != 'reset'
+
+        # Get dontStopAppOnReset value
+        # "dontStop"の場合はTrue、それ以外はFalse
+        dont_stop_app_on_reset_value = str(case.get("dontStopAppOnReset", "")).strip()
+        dont_stop_app_on_reset = dont_stop_app_on_reset_value.lower() == 'dontstop'
 
         task = (
             f"手順: {steps}\n"
             f"合否判定基準: {expected}\n"
             f"合否判定基準に合致する場合には: 判断理由とともに {criteria} と答えなさい"
         )
-
-        # Allure dynamic metadata
-        allure.dynamic.title(f"[{cid}] {title}" if cid else title)
-
-        if desc:
-            allure.attach(
-                desc, name="Description", attachment_type=allure.attachment_type.TEXT
-            )
-        if expected:
-            allure.attach(
-                expected,
-                name="ExpectedResults/Criteria",
-                attachment_type=allure.attachment_type.TEXT,
-            )
 
         # Execute steps via your agent
         with allure.step(title):
@@ -95,7 +89,7 @@ def create_test_function(case, test_num):
             print(Fore.YELLOW + f"期待される基準: {expected}")
             
             # カスタムknowhowを使用してエージェントを作成
-            agent = SmartestiRoid(agent_session, no_reset, knowhow=custom_knowhow)
+            agent = SmartestiRoid(agent_session, no_reset, dont_stop_app_on_reset, knowhow=custom_knowhow)
             agent_response = await agent.validate_task(
                 task=task,
                 expected_substring=criteria,
