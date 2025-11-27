@@ -295,7 +295,7 @@ async def evaluate_task_result(
     # Allureにevaluation用モデル情報を記録
     allure.attach(
         f"Evaluation Model: {model}\nEnvironment: USE_MINI_MODEL={os.environ.get('USE_MINI_MODEL', '0')}",
-        name="🤖 Evaluation LLM設定",
+        name="🤖 Evaluation LLM Model",
         attachment_type=allure.attachment_type.TEXT
     )
 
@@ -527,8 +527,8 @@ class MultiStageReplanner:
             return decision_norm, result.reason.strip()
         except Exception as e:
             # 構造化出力失敗時は安全側でPLANを返す
-            print(Fore.RED + f"decide_action構造化出力エラー: {e}")
-            allure.attach(str(e), name="❌ decide_action 構造化出力エラー", attachment_type=allure.attachment_type.TEXT)
+            print(Fore.RED + f"Structured Output Error: {e}")
+            allure.attach(str(e), name="❌ decide_action: Structured Output Error", attachment_type=allure.attachment_type.TEXT)
             return "PLAN", "構造化出力エラーのためフォールバック"
     
     async def build_plan(self, goal: str, original_plan: list, past_steps: list, state_summary: str) -> Plan:
@@ -627,7 +627,7 @@ class SimplePlanner:
         # Allureにモデル情報を記録
         allure.attach(
             f"Planner Model: {model_name}\nMode: Multi-stage replan",
-            name="🤖 SimplePlanner LLM設定",
+            name="🤖 SimplePlanner LLM Model",
             attachment_type=allure.attachment_type.TEXT
         )
 
@@ -714,7 +714,7 @@ class SimplePlanner:
     ) -> Act:
         # Multi-stage replan処理
             try:
-                print(Fore.CYAN + f"🔀 Multi-stage replan: ステージ1（状態分析） [model: {self.model_name}]")
+                print(Fore.CYAN + f"🔀 Multi-stage replan: STAGE 1（State Analysis）[model: {self.model_name}]")
                 state_summary = await self.replanner.analyze_state(
                     goal=state["input"],
                     original_plan=state["plan"],
@@ -724,9 +724,9 @@ class SimplePlanner:
                     current_image_url=image_url
                 )
                 print(Fore.CYAN + f"状態要約:\n{state_summary}")
-                allure.attach(state_summary, name="🔍 状態分析結果", attachment_type=allure.attachment_type.TEXT)
+                allure.attach(state_summary, name=f"🔍 State Analysis Results [model: {self.model_name}]", attachment_type=allure.attachment_type.TEXT)
                 
-                print(Fore.CYAN + "🔀 Multi-stage replan: ステージ2（アクション判定）")
+                print(Fore.CYAN + "🔀 Multi-stage replan: STAGE 2（Action Decision）")
                 decision, reason = await self.replanner.decide_action(
                     goal=state["input"],
                     original_plan=state["plan"],
@@ -734,9 +734,9 @@ class SimplePlanner:
                     state_summary=state_summary
                 )
                 print(Fore.CYAN + f"判定結果: {decision}\n理由: {reason}")
-                allure.attach(f"DECISION: {decision}\n{reason}", name="⚖️ アクション判定", attachment_type=allure.attachment_type.TEXT)
+                allure.attach(f"DECISION: {decision}\n{reason}", name="⚖️ Action Decision", attachment_type=allure.attachment_type.TEXT)
                 
-                print(Fore.CYAN + "🔀 Multi-stage replan: ステージ3（出力生成）")
+                print(Fore.CYAN + "🔀 Multi-stage replan: STAGE 3（Output Generation）")
                 if decision == "RESPONSE":
                     response = await self.replanner.build_response(
                         goal=state["input"],
@@ -757,7 +757,7 @@ class SimplePlanner:
             
             except Exception as e:
                 print(Fore.RED + f"⚠️ Multi-stage replan エラー: {e}")
-                allure.attach(f"Multi-stage replan エラー: {e}", name="❌ Multi-stage エラー", attachment_type=allure.attachment_type.TEXT)
+                allure.attach(f"Multi-stage replan error: {e}", name="❌ Multi-stage error", attachment_type=allure.attachment_type.TEXT)
                 # フォールバック: 残りのステップを返す
                 remaining_steps = state["plan"][len(state["past_steps"]):]
                 if remaining_steps:
@@ -853,13 +853,13 @@ def create_workflow_functions(
             # ログとAllureには整形したロケーター情報を出力
             allure.attach(
                 locator,
-                name="📍ロケーター情報",
+                name="📍 Locator Information",
                 attachment_type=allure.attachment_type.TEXT
             )
             if image_url:
                 allure.attach(
                     base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="📷Current Screen",
+                    name="📷 Current Screen",
                     attachment_type=allure.attachment_type.JPG,
                 )
             
@@ -921,7 +921,7 @@ def create_workflow_functions(
                 )
                 elapsed = time.time() - start_time
                 allure.attach(
-                    f"{elapsed:.3f}秒",
+                    f"{elapsed:.3f} seconds",
                     name="⏱️Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
@@ -944,13 +944,13 @@ def create_workflow_functions(
                 print(Fore.RED + f"execute_stepでエラー: {e}")
                 elapsed = time.time() - start_time
                 allure.attach(
-                    f"{elapsed:.3f}秒",
+                    f"{elapsed:.3f} seconds",
                     name="Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 
                 allure.attach(
-                    f"エラー詳細:\n{error_msg}\n\nステップ: {task}",
+                    f"Detail:\n{error_msg}\n\nStep: {task}",
                     name="❌ Execute Step Error",
                     attachment_type=allure.attachment_type.TEXT,
                 )
@@ -959,7 +959,7 @@ def create_workflow_functions(
                 step_history["executed_steps"].append(
                     {
                         "step": task,
-                        "response": f"エラー: {error_msg}",
+                        "response": f"Error: {error_msg}",
                         "timestamp": time.time(),
                         "success": False,
                     }
@@ -982,14 +982,14 @@ def create_workflow_functions(
                     # ログとAllureには整形したロケーター情報を出力
                     allure.attach(
                         locator,
-                        name="📍ロケーター情報",
+                        name="📍 Locator Information",
                         attachment_type=allure.attachment_type.TEXT
                     )
 
                 if image_url:
                     allure.attach(
                         base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                        name="📷Screenshot before Planning",
+                        name="📷 Screenshot before Planning",
                         attachment_type=allure.attachment_type.JPG,
                     )
 
@@ -1010,8 +1010,8 @@ def create_workflow_functions(
 
                 elapsed = time.time() - start_time
                 allure.attach(
-                    f"{elapsed:.3f}秒",
-                    name=f"⏱️Plan Step Time : {elapsed:.3f}秒",
+                    f"{elapsed:.3f} seconds",
+                    name=f"⏱️ Plan Step Time : {elapsed:.3f} seconds",
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
@@ -1031,8 +1031,8 @@ def create_workflow_functions(
                 basic_plan = await planner.create_plan(state["input"])
                 elapsed = time.time() - start_time
                 allure.attach(
-                    f"{elapsed:.3f}秒",
-                    name=f"Plan Step Time : {elapsed:.3f}秒",
+                    f"{elapsed:.3f} seconds",
+                    name=f"Plan Step Time : {elapsed:.3f} seconds",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 # エラー時はキャッシュをクリア
@@ -1060,12 +1060,12 @@ def create_workflow_functions(
                 )
                 elapsed = time.time() - start_time
                 allure.attach(
-                    f"{elapsed:.3f}秒",
+                    f"{elapsed:.3f} seconds",
                     name="🧠 Replan Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 return {
-                    "response": f"リプラン回数が制限（{max_replan_count}回）に達したため、処理を終了しました。現在の進捗: {len(state['past_steps'])}ステップ完了。",
+                    "response": f"リプラン回数が制限（{max_replan_count}回）に達したため、処理を終了しました。現在の進捗: {len(state['past_steps'])}ステップ完了.",
                     "replan_count": current_replan_count + 1,
                 }
             try:
@@ -1081,7 +1081,7 @@ def create_workflow_functions(
                     # ログとAllureには整形したロケーター情報を出力
                     allure.attach(
                         locator,
-                        name="📍ロケーター情報",
+                        name="📍 Locator Information",
                         attachment_type=allure.attachment_type.TEXT
                     )
 
@@ -1091,14 +1091,14 @@ def create_workflow_functions(
                         base64.b64decode(
                             previous_image_url.replace("data:image/jpeg;base64,", "")
                         ),
-                        name="📷Previous Screenshot (Before Action)",
+                        name="📷 Previous Screenshot (Before Action)",
                         attachment_type=allure.attachment_type.JPG,
                     )
 
                 # 現在画像を添付
                 allure.attach(
                     base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="📷Current Screenshot (After Action)",
+                    name="📷 Current Screenshot (After Action)",
                     attachment_type=allure.attachment_type.JPG,
                 )
 
@@ -1144,8 +1144,8 @@ def create_workflow_functions(
 
                     elapsed = time.time() - start_time
                     allure.attach(
-                        f"{elapsed:.3f}秒",
-                        name="⏱️Replan Step Time",
+                        f"{elapsed:.3f} seconds",
+                        name="⏱️ Replan Step Time",
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     return {
@@ -1160,8 +1160,8 @@ def create_workflow_functions(
                     )
                     elapsed = time.time() - start_time
                     allure.attach(
-                        f"{elapsed:.3f}秒",
-                        name="⏱️Replan Step Time",
+                        f"{elapsed:.3f} seconds",
+                        name="⏱️ Replan Step Time",
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     return {
@@ -1172,8 +1172,8 @@ def create_workflow_functions(
                 print(Fore.RED + f"Error in replan_step: {e}")
                 elapsed = time.time() - start_time
                 allure.attach(
-                    f"{elapsed:.3f}秒",
-                    name="⏱️Replan Step Time",
+                    f"{elapsed:.3f} seconds",
+                    name="⏱️ Replan Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 # エラーの場合は終了
@@ -1325,7 +1325,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             # Allureにモデル情報を記録
             allure.attach(
                 f"Agent Executor Model: {model}\nEnvironment: USE_MINI_MODEL={os.environ.get('USE_MINI_MODEL', '0')}",
-                name="🤖 Agent Executor LLM設定",
+                name="🤖 Agent Executor LLM model",
                 attachment_type=allure.attachment_type.TEXT
             )
 
