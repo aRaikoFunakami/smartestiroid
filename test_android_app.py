@@ -7,9 +7,6 @@ import sys
 
 init(autoreset=True)
 
-EXPECTED_STATS_RESULT = "EXPECTED_STATS_RESULT"
-SKIPPED_STATS_RESULT = "SKIPPED_STATS_RESULT"
-
 
 def load_csv_cases(path: str = "testsheet.csv"):
     """Read CSV and return list[dict] rows.
@@ -63,7 +60,6 @@ def create_test_function(case, test_num):
         
         # Extract fields
         steps = str(case.get("Step", "")).strip() 
-        criteria = str(case.get("Criteria")).strip()
         
         # Reset列の値を取得してno_reset値を決定
         # "Reset"の場合はno_reset=False（リセットあり）、"noReset"の場合はno_reset=True（リセットなし）
@@ -75,11 +71,6 @@ def create_test_function(case, test_num):
         dont_stop_app_on_reset_value = str(case.get("dontStopAppOnReset", "")).strip()
         dont_stop_app_on_reset = dont_stop_app_on_reset_value.lower() == 'dontstop'
 
-        task = (
-            f"手順: {steps}\n"
-            f"合否判定基準: {expected}\n"
-            f"合否判定基準に合致する場合には: 判断理由とともに {criteria} と答えなさい"
-        )
 
         # Execute steps via your agent
         with allure.step(title):
@@ -91,9 +82,8 @@ def create_test_function(case, test_num):
             # カスタムknowhowを使用してエージェントを作成
             agent = SmartestiRoid(agent_session, no_reset, dont_stop_app_on_reset, knowhow=custom_knowhow)
             agent_response = await agent.validate_task(
-                task=task,
-                expected_substring=criteria,
-                ignore_case=True,
+                steps=steps,
+                expected=expected,
             )
             print(Fore.MAGENTA + f"最終応答: {agent_response}")
             

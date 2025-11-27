@@ -7,8 +7,6 @@ from colorama import Fore, init
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langgraph.graph import StateGraph, START, END
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.messages import HumanMessage, SystemMessage
 import base64
 from PIL import Image
@@ -23,7 +21,7 @@ import time
 from appium_tools import appium_driver, appium_tools
 from langchain_core.callbacks import BaseCallbackHandler
 
-# 不要となった詳細例外型や時間計測は簡素化のため削除
+
 
 capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
 
@@ -32,8 +30,9 @@ OPENAI_TIMEOUT = 180.0  # 180秒
 OPENAI_MAX_RETRIES = 1  # リトライ1回
 
 # Result status constants
-EXPECTED_STATS_RESULT = "EXPECTED_STATS_RESULT"
-SKIPPED_STATS_RESULT = "SKIPPED_STATS_RESULT"
+RESULT_PASS = "RESULT_PASS"
+RESULT_SKIP = "RESULT_SKIP"
+RESULT_NG = "RESULT_NG"
 
 # Knowhow information for all LLMs
 KNOWHOW_INFO = """
@@ -57,15 +56,7 @@ KNOWHOW_INFO = """
 * 新しいアカウントの作成や登録は行わないでください
 """
 
-SERVER_CONFIG = {
-    "jarvis-appium-sse": {
-        "url": "http://localhost:7777/sse",
-        "transport": "sse",
-    },
-}
-
 init(autoreset=True)
-
 
 class AllureToolCallbackHandler(BaseCallbackHandler):
     """Allure にツール呼び出し履歴を記録するコールバックハンドラー"""
@@ -285,7 +276,7 @@ def pytest_configure(config):
 async def evaluate_task_result(
     task_input: str, response: str, executed_steps: list = None
 ) -> str:
-    """タスク結果を構造化評価し EXPECTED_STATS_RESULT / SKIPPED_STATS_RESULT を厳密返却する"""
+    """タスク結果を構造化評価し RESULT_PASS / RESULT_SKIP / RESULT_NG を厳密返却する"""
     use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
     if use_mini_model:
         print(Fore.CYAN + "🔀 Miniモデルによる再評価モード有効")
@@ -323,13 +314,13 @@ async def evaluate_task_result(
 {response}
 
 判定規則:
-1. {EXPECTED_STATS_RESULT} の条件:
+1. {RESULT_PASS} の条件:
     - 指示手順を過不足なく実行
     - 不要/逸脱ステップなし
     - 初期設定ダイアログ対応や広告ダイアログ対応は不要/逸脱ステップに含めない
     - 応答内に期待基準へ直接対応する具体的根拠（要素ID / text / 画像説明 / 操作結果）が存在
     - 画像評価が必要なケースではその根拠を言及
-2. {SKIPPED_STATS_RESULT} の条件:
+2. {RESULT_SKIP} の条件:
     - 根拠が曖昧 / 反証不能 / 主観的
     - 必要手順不足 or 余計な操作あり
     - ロケータ / 画像確認が必要なのに不十分
@@ -352,7 +343,7 @@ async def evaluate_task_result(
         status = eval_struct.status
         reason = eval_struct.reason.strip()
 
-        color = Fore.GREEN if status == EXPECTED_STATS_RESULT else Fore.RED
+        color = Fore.GREEN if status == RESULT_PASS else Fore.RED
         print(color + f"[evaluate_task_result] status={status}")
 
         return f"{status}\n判定理由:\n{reason}"
@@ -370,7 +361,7 @@ async def evaluate_task_result(
             model=model,
             error=e
         )
-        return f"{SKIPPED_STATS_RESULT}\n判定理由: 評価中エラー ({err_type})"
+        return f"{RESULT_SKIP}\n判定理由: 評価中エラー ({err_type})"
 
 
 # --- 状態定義 ---
@@ -406,10 +397,10 @@ class DecisionResult(BaseModel):
 class EvaluationResult(BaseModel):
     """テスト結果評価の構造化出力モデル
 
-    status: EXPECTED_STATS_RESULT (合格) か SKIPPED_STATS_RESULT (要目視確認)
+    status: RESULT_PASS (合格) か RESULT_SKIP (要目視確認)か RESULT_NG (不合格)
     reason: 判定根拠（手順整合性 / 要素根拠 / 不足点 / 画像評価有無などを含める）
     """
-    status: Literal["EXPECTED_STATS_RESULT", "SKIPPED_STATS_RESULT"] = Field(description="判定結果ステータス")
+    status: Literal["RESULT_PASS", "RESULT_SKIP", "RESULT_NG"] = Field(description="判定結果ステータス")
     reason: str = Field(description="詳細な判定理由（100〜600文字程度。根拠要素/手順対応/不足点/改善提案を含め可）")
 
 
@@ -528,7 +519,7 @@ class MultiStageReplanner:
         prompt = f"""
 あなたは実行計画を作成するエキスパートです。
 
-目標:
+目標
 {goal}
 
 現在の状態要約:
@@ -580,12 +571,12 @@ class MultiStageReplanner:
 タスクの完了を報告してください。以下を含めること：
 1. 完了理由の詳細をロケーター情報や画面状態に基づいて説明
 2. 目標が達成されていることの根拠をロケーター情報や画面状態に基づいて詳細に説明
-3. 最後の行に必ず {EXPECTED_STATS_RESULT} を単独で記載
+3. 最後の行に必ず {RESULT_PASS} を単独で記載
 
 出力形式:
 - テキストでタスク完了の理由と根拠を詳細に記述する
 - 初期設定ダイアログ対応や広告ダイアログ対応は不要/逸脱ステップに含めないステップを行った場合は、そのステップの詳細をロケーター情報を含めて保持事項として説明する
-- 最後の行に {EXPECTED_STATS_RESULT} を追記する
+- 最後の行に {RESULT_PASS} を追記する
 """
         
         messages = [HumanMessage(content=prompt)]
@@ -756,7 +747,7 @@ class SimplePlanner:
                     print(Fore.YELLOW + f"🔄 フォールバック: 残り{len(remaining_steps)}ステップを返却")
                     return Act(action=fallback_plan)
                 else:
-                    fallback_response = Response(response=f"エラー発生のため処理を中断します: {e}\n\n{EXPECTED_STATS_RESULT}")
+                    fallback_response = Response(response=f"エラー発生のため処理を中断します: {e}\n\n{RESULT_PASS}")
                     return Act(action=fallback_response)
         
         # --- 従来の単発モード ---
@@ -1220,7 +1211,7 @@ def create_workflow_functions(
 
                     # 合格判定した場合はその合格判定が正しいかを再評価する
                     # 人間の目視確認が必要な場合はSKIPにする
-                    if EXPECTED_STATS_RESULT in evaluated_response:
+                    if RESULT_PASS in evaluated_response:
                         # 期待動作の抽出（state.inputから期待基準を取得）
                         task_input = state.get("input", "")
 
@@ -1529,9 +1520,8 @@ class SmartestiRoid:
 
     async def validate_task(
         self,
-        task: str,
-        expected_substring: Optional[str] = None,
-        ignore_case: bool = False,
+        steps: str,
+        expected: str = "",
         knowhow: Optional[str] = None,
     ) -> str:
         """
@@ -1539,7 +1529,6 @@ class SmartestiRoid:
         
         Args:
             task: 実行するタスク
-            expected_substring: 期待される部分文字列
             ignore_case: 大文字小文字を無視するか
             knowhow: カスタムknowhow情報（Noneの場合はインスタンスのknowhowを使用）
         """
@@ -1552,6 +1541,10 @@ class SmartestiRoid:
         async for graph in self.agent_session(self.no_reset, self.dont_stop_app_on_reset, effective_knowhow):
             # state["input"]には純粋なタスクのみを渡す
             # knowhowは各LLM（SimplePlanner、agent_executor）が既に持っている
+            task = (
+                f"テスト実施手順:{steps}\n\n"
+                f"テスト合否判定基準:{expected}\n"
+            )
             inputs = {"input": task}
             
             if knowhow is not None:
@@ -1576,16 +1569,16 @@ class SmartestiRoid:
         result_text = final_result.get("response", None)
         assert result_text is not None, "Agent did not return a final result."
 
-        # SKIPPED_STATS_RESULTが含まれている場合は、pytestでskipする
-        if SKIPPED_STATS_RESULT in result_text:
+        # RESULT_SKIPが含まれている場合は、pytestでskipする
+        if RESULT_SKIP in result_text:
             pytest.skip("このテストは出力結果の目視確認が必要です")
 
-        if expected_substring:
-            result_to_check = result_text.lower() if ignore_case else result_text
+        if RESULT_PASS:
+            result_to_check = result_text.lower()
             substring_to_check = (
-                expected_substring.lower() if ignore_case else expected_substring
+                RESULT_PASS.lower()
             )
             assert substring_to_check in result_to_check, (
-                f"Assertion failed: Expected '{expected_substring}' not found in agent result: '{result_text}'"
+                f"Assertion failed: Expected '{RESULT_PASS}' not found in agent result: '{result_text}'"
             )
         return result_text
