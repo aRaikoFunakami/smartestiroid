@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage
 import allure
 
 from models import Plan, Response, DecisionResult
-from config import RESULT_PASS
+from config import RESULT_PASS, RESULT_FAIL
 
 
 class MultiStageReplanner:
@@ -55,17 +55,33 @@ class MultiStageReplanner:
 したがって、"省略" や "不要" といった語で未実行ステップを評価してはいけません。"省略可能"と判断した場合でも、必ずそのステップを実行しなければならない前提でPLANを返してください。
 
 出力形式:
-プレーンテキストで、判断に利用したオブジェクトとそのロケーター情報と共に以下のセクションを含むこと。
-- 画面の変化と差分分析
-- テスト進捗
-- 次のステップをそのまま実行可能か否かをその理由と共に
-- 問題兆候の有無
-- 主要要素の確認状況
-- 目標達成の可否
-- 目標達成の可否の理由
+1. **画面の変化と差分分析**  
+前ステップからの変更点を、特に重要なUI差分に焦点を当てて記述すること。
+
+2. **テスト進捗**  
+現在のテスト状態を定量的または定性的に評価して示すこと。
+
+3. **問題兆候の有無**  
+異常挙動・エラー・予期しない遷移の有無を判断し、詳細に記述すること。
+
+4. **画面主要要素の確認と説明**  
+現在の画面が何を表示しているかを理解するため、  
+主要なUI要素を **画像ベース** 及び **ロケータ（例: XPath, CSS Selector）** によって確認し、  
+それぞれの役割や意図を詳細に説明すること。
+
+5. **目標達成の可否**  
+テストの目標が達成されているか明確に判定すること。
+
+6. **目標達成可否の理由**  
+判断根拠をロケータ情報および実際の画面状況に基づき論理的に記述すること。
+
+7. **ステップ改善案（任意）**  
+改善できる操作や検証観点があれば具体的に提案すること。
 
 現在のロケーター情報:
 {locator}
+
+画面スクリーンショット（前回の画面と現在の画面):
 """
 
         content_blocks: List[Dict[str, Any]] = [{"type": "text", "text": prompt_text}]
@@ -146,11 +162,9 @@ class MultiStageReplanner:
 
 タスク:
 目標達成のために必要な最適なステップ列を作成してください。以下を必ず守ること：
-- 現在フォアグラウンドで動作しているアプリIDがテストを実施するアプリであることを確認すること
 - ステップを実行できる状態でない場合は、現在の状態を考慮して最適なステップを再構築してください
 - 可能なら既存未完了ステップを再利用し重複を避けること
 - ステップを選択した根拠（進捗・画面要素・残り目標）を簡潔に言語化すること
-- そのステップの必要性をロケーター情報を含めて必ず明示すること
 - 現在の状態を考慮すること
 - 不要なステップは追加しない
 - 各ステップは具体的で実行可能なこと
@@ -181,18 +195,18 @@ class MultiStageReplanner:
 
 【タスク】
 タスクの完了を報告してください。以下を含めること：
-1. 完了理由の詳細をロケーター情報や画面状態に基づいて説明
-2. 目標が達成されていることの根拠をロケーター情報や画面状態に基づいて詳細に説明
-3. 最後の行に必ず {RESULT_PASS} を単独で記載
+1. status: {RESULT_PASS} または {RESULT_FAIL} のいずれかを設定
+2. reason: 完了理由の詳細をロケーター情報や画面状態に基づいて説明（100〜600文字程度）
+   - 目標が達成されていることの根拠
+   - 確認した要素の説明
+   - 実行した手順の対応
 
 出力形式:
-- テキストでタスク完了の理由と根拠を詳細に記述する
-- 初期設定ダイアログ対応や広告ダイアログ対応は不要/逸脱ステップに含めないステップを行った場合は、そのステップの詳細をロケーター情報を含めて保持事項として説明する
-- 最後の行に {RESULT_PASS} を追記する
+厳格なJSON形式（status と reason フィールドを持つ）
 """
         
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Response)
         resp = await structured_llm.ainvoke(messages)
-        print(Fore.MAGENTA + f"[MultiStageReplanner.build_response model: {self.model_name}] Response created")
+        print(Fore.MAGENTA + f"[MultiStageReplanner.build_response model: {self.model_name}] Response created: {resp.status}")
         return resp

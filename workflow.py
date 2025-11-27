@@ -332,24 +332,24 @@ def create_workflow_functions(
 
                 if isinstance(output.action, Response):
                     allure.attach(
-                        output.action.response,
+                        f"Status: {output.action.status}\n\nReason:\n{output.action.reason}",
                         name="Replan Response",
                         attachment_type=allure.attachment_type.TEXT,
                     )
 
-                    evaluated_response = output.action.response
+                    evaluated_response = f"{output.action.reason}\n\n{output.action.status}"
 
                     # 合格判定した場合はその合格判定が正しいかを再評価する
                     # 人間の目視確認が必要な場合はSKIPにする
                     from config import RESULT_PASS
-                    if RESULT_PASS in evaluated_response:
+                    if RESULT_PASS in output.action.status:
                         # 期待動作の抽出（state.inputから期待基準を取得）
                         task_input = state.get("input", "")
 
                         # 合否判定ロジックを適用（ステップ履歴も含めて）
                         evaluated_response = await evaluate_task_result_func(
                             task_input,
-                            output.action.response,
+                            evaluated_response,
                             step_history["executed_steps"],
                         )
 

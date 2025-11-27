@@ -46,9 +46,11 @@ class Response(BaseModel):
     """Response model for final agent output.
     
     Attributes:
-        response: The response text
+        status: Result status (RESULT_PASS or RESULT_FAIL)
+        reason: Detailed reasoning for the evaluation
     """
-    response: str
+    status: Literal["RESULT_PASS", "RESULT_FAIL"] = Field(description="判定結果ステータス")
+    reason: str = Field(description="詳細な判定理由（100〜600文字程度。根拠要素/手順対応/不足点/改善提案を含め可）")
 
 
 class Act(BaseModel):
@@ -79,8 +81,8 @@ class EvaluationResult(BaseModel):
     """Test result evaluation model.
     
     Attributes:
-        status: Result status (RESULT_PASS, RESULT_SKIP, or RESULT_NG)
+        status: Result status (RESULT_PASS, RESULT_SKIP, or RESULT_FAIL)
         reason: Detailed reasoning for the evaluation
     """
-    status: Literal["RESULT_PASS", "RESULT_SKIP", "RESULT_NG"] = Field(description="判定結果ステータス")
+    status: Literal["RESULT_PASS", "RESULT_SKIP", "RESULT_FAIL"] = Field(description="判定結果ステータス")
     reason: str = Field(description="詳細な判定理由（100〜600文字程度。根拠要素/手順対応/不足点/改善提案を含め可）")

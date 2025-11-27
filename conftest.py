@@ -26,7 +26,7 @@ from config import (
     OPENAI_TIMEOUT, OPENAI_MAX_RETRIES,
     MODEL_STANDARD, MODEL_MINI, MODEL_EVALUATION, MODEL_EVALUATION_MINI,
     planner_model, execution_model, evaluation_model,
-    RESULT_PASS, RESULT_SKIP, RESULT_NG,
+    RESULT_PASS, RESULT_SKIP, RESULT_FAIL,
     KNOWHOW_INFO
 )
 from workflow import create_workflow_functions
@@ -118,7 +118,7 @@ def pytest_configure(config):
 async def evaluate_task_result(
     task_input: str, response: str, executed_steps: list = None
 ) -> str:
-    """タスク結果を構造化評価し RESULT_PASS / RESULT_SKIP / RESULT_NG を厳密返却する"""
+    """タスク結果を構造化評価し RESULT_PASS / RESULT_SKIP / RESULT_FAIL を厳密返却する"""
     # 使用モデルの決定
     model = evaluation_model
 
@@ -422,6 +422,12 @@ class SmartestiRoid:
 
             except Exception as e:
                 print(Fore.RED + f"実行中にエラーが発生しました: {e}")
+                allure.attach(
+                    f"テスト実行中にエラーが発生しました:\n{e}",
+                    name="❌ Test Execution Error",
+                    attachment_type=allure.attachment_type.TEXT,
+                )
+                assert False, f"テスト実行中にエラーが発生しました: {e}"
             finally:
                 print(Fore.CYAN + "=== Plan-and-Execute Agent 終了 ===")
             # async forループは一度だけ実行されるのでbreakが不要

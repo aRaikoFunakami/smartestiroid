@@ -38,7 +38,7 @@ else:
 # --- Test Result Status Constants ---
 RESULT_PASS = "RESULT_PASS"
 RESULT_SKIP = "RESULT_SKIP"
-RESULT_NG = "RESULT_NG"
+RESULT_FAIL = "RESULT_FAIL"
 
 
 # --- Default Knowhow Information ---
@@ -47,9 +47,8 @@ KNOWHOW_INFO = """
 * 事前に appium とは接続されています
 * アプリ起動時にプライバシーポリシーが表示された場合、同意操作を行ってください
 * アプリ起動時にディスクリーマーポリシーが表示された場合、同意操作を行ってください
-* 必要に応じてスクロール操作でポリシーを全文表示させてから同意してください
 * アプリ起動時に初期設定ダイアログが表示された場合、適切に対応してください
-* アプリ起動時に広告ダイアログが表示された場合、閉じる操作を行ってください
+
 
 ツール使用のルール - 必ず守ること:
 * アプリの操作は、必ずツールを使用して行いなさい

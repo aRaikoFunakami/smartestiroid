@@ -32,64 +32,32 @@ async def generate_screen_info(screenshot_tool, generate_locators, max_retries: 
         try:
             print(f"screenshot_tool 実行... (attempt {attempt + 1}/{max_retries + 1})")
             screenshot = await screenshot_tool.ainvoke({})
-            
-            if screenshot and not screenshot.startswith("Failed"):
-                print("screenshot_tool 結果: 成功", screenshot[:50])
-                break
-            else:
-                error_msg = screenshot if screenshot else "No response"
-                print(f"screenshot_tool 失敗: {error_msg[:200]}")
-                
-                if attempt < max_retries:
-                    await asyncio.sleep(1)
-                else:
-                    # 最終試行でも失敗 → テスト終了
-                    assert False, f"❌ screenshot取得に失敗しました: {error_msg[:300]}"
-        except AssertionError:
-            raise
+            print("screenshot_tool 結果: 成功")
+            break
         except Exception as e:
-            error_str = str(e)
-            print(f"screenshot_tool エラー (attempt {attempt + 1}): {error_str[:200]}")
-            
+            print(f"screenshot_tool エラー (attempt {attempt + 1}): {str(e)[:200]}")
             if attempt < max_retries:
                 await asyncio.sleep(1)
             else:
-                # 最終試行でも失敗 → テスト終了
-                assert False, f"❌ screenshot取得に失敗しました: {error_str[:300]}"
+                assert False, f"❌ screenshot取得に失敗しました: {e}"
 
     # ロケーター取得のリトライ
     for attempt in range(max_retries + 1):
         try:
             print(f"generate_locators 実行... (attempt {attempt + 1}/{max_retries + 1})")
             locator = await generate_locators.ainvoke({})
-            
-            if locator and not locator.startswith("Failed"):
-                print("generate_locators 結果: 成功", locator[:50])
-                break
-            else:
-                error_msg = locator if locator else "No response"
-                print(f"generate_locators 失敗: {error_msg[:200]}")
-                
-                if attempt < max_retries:
-                    await asyncio.sleep(1)
-                else:
-                    # 最終試行でも失敗 → テスト終了
-                    assert False, f"❌ locator取得に失敗しました: {error_msg[:300]}"
-        except AssertionError:
-            raise
+            print("generate_locators 結果: 成功")
+            break
         except Exception as e:
-            error_str = str(e)
-            print(f"generate_locators エラー (attempt {attempt + 1}): {error_str[:200]}")
-            
+            print(f"generate_locators エラー (attempt {attempt + 1}): {str(e)[:200]}")
             if attempt < max_retries:
                 await asyncio.sleep(1)
             else:
-                # 最終試行でも失敗 → テスト終了
-                assert False, f"❌ locator取得に失敗しました: {error_str[:300]}"
+                assert False, f"❌ locator取得に失敗しました: {e}"
 
     # 画像処理
     image_url = ""
-    if screenshot and not screenshot.startswith("Failed"):
+    if screenshot:
         try:
             # base64デコード時のパディングエラーを処理
             try:

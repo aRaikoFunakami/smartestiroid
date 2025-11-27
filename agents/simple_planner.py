@@ -147,7 +147,7 @@ class SimplePlanner:
                         past_steps=state["past_steps"],
                         state_summary=state_summary
                     )
-                    print(Fore.GREEN + f"✅ Response生成完了: {response.response[:100]}...")
+                    print(Fore.GREEN + f"✅ Response生成完了: [{response.status}] {response.reason[:100]}...")
                     return Act(action=response)
                 else:
                     plan = await self.replanner.build_plan(
@@ -169,5 +169,5 @@ class SimplePlanner:
                     print(Fore.YELLOW + f"🔄 フォールバック: 残り{len(remaining_steps)}ステップを返却")
                     return Act(action=fallback_plan)
                 else:
-                    fallback_response = Response(response=f"エラー発生のため処理を中断します: {e}\n\n{RESULT_PASS}")
+                    fallback_response = Response(status=RESULT_PASS, reason=f"エラー発生のため処理を中断します: {e}")
                     return Act(action=fallback_response)
