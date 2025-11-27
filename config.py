@@ -58,6 +58,12 @@ KNOWHOW_INFO = """
 * 初期設定ダイアログが表示された場合はデフォルト設定で対応せよ
 * 広告ダイアログが表示された場合は閉じる操作を行え
 
+ロケーター戦略の制約 (必ず守ること)
+* Androidでは accessibility_id は使用禁止
+* 要素を指定する際は必ず 'id' (resource-id), 'xpath', または 'uiautomator' を使用せよ
+* 例: {'by': 'id', 'value': 'com.android.chrome:id/menu_button'}
+* 例: {'by': 'xpath', 'value': '//android.widget.Button[@content-desc="More options"]'}
+
 厳格ルール:
 * アカウント情報の入力禁止
 * パスワードの入力禁止

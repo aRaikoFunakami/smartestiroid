@@ -211,16 +211,17 @@ def create_workflow_functions(
                 plan = await planner.create_plan(state["input"], locator, image_url)
                 print(Fore.GREEN + f"生成された計画: {plan}")
 
+                # ステップを番号付きリストに整形し、reasoning も含める
+                formatted_steps = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan.steps))
+                if plan.reasoning:
+                    formatted_output = f"【計画の根拠】\n{plan.reasoning}\n\n【実行ステップ】\n{formatted_steps}"
+                else:
+                    formatted_output = formatted_steps
+                    
                 allure.attach(
-                    str(plan.steps),
+                    formatted_output,
                     name=f"🎯Plan [model: {planner_model}]",
                     attachment_type=allure.attachment_type.TEXT,
-                )
-
-                allure.attach(
-                    plan.reasoning, 
-                    name=f"🧠 Plan Reasoning [model: {planner_model}]", 
-                    attachment_type=allure.attachment_type.TEXT
                 )
 
                 elapsed = time.time() - start_time
@@ -370,8 +371,15 @@ def create_workflow_functions(
                         "replan_count": current_replan_count + 1,
                     }
                 else:
+                    # ステップを番号付きリストに整形し、reasoning も含める
+                    formatted_steps = "\n".join(f"{i+1}. {step}" for i, step in enumerate(output.action.steps))
+                    if hasattr(output.action, 'reasoning') and output.action.reasoning:
+                        formatted_output = f"【計画の根拠】\n{output.action.reasoning}\n\n【実行ステップ】\n{formatted_steps}"
+                    else:
+                        formatted_output = formatted_steps
+                        
                     allure.attach(
-                        str(output.action.steps),
+                        formatted_output,
                         name=f"🧠 Replan Steps [model: {planner_model}]",
                         attachment_type=allure.attachment_type.TEXT,
                     )
