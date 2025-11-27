@@ -29,6 +29,13 @@ capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
 OPENAI_TIMEOUT = 180.0  # 180秒
 OPENAI_MAX_RETRIES = 1  # リトライ1回
 
+# Model configuration
+# 環境変数 USE_MINI_MODEL=1 を設定すると自動的にminiモデルに切り替わります
+MODEL_STANDARD = "gpt-4.1"        # 標準モデル（高精度）
+MODEL_MINI = "gpt-4.1-mini"       # Miniモデル（高速・低コスト）
+MODEL_EVALUATION = "gpt-5"        # 評価用モデル（標準時）
+MODEL_EVALUATION_MINI = "gpt-5-mini"  # 評価用モデル（Mini時）
+
 # Result status constants
 RESULT_PASS = "RESULT_PASS"
 RESULT_SKIP = "RESULT_SKIP"
@@ -47,6 +54,7 @@ KNOWHOW_INFO = """
 ツール使用のルール - 必ず守ること:
 * アプリの操作は、必ずツールを使用して行いなさい
 * アプリの起動や終了も、必ずツールを使用して行いなさい
+* フォアグラウンドで実行中のアプリの確認: get_current_app を使用せよ
 * アプリ実行/起動: activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップ処理で良い)
 * アプリ終了: terminate_app を使用せよ
 * 入力確定: press_keycode で <Enter> を使用せよ
@@ -280,9 +288,16 @@ async def evaluate_task_result(
     use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
     if use_mini_model:
         print(Fore.CYAN + "🔀 Miniモデルによる再評価モード有効")
-        model = "gpt-5-mini"
+        model = MODEL_EVALUATION_MINI
     else:
-        model = "gpt-5"
+        model = MODEL_EVALUATION
+
+    # Allureにevaluation用モデル情報を記録
+    allure.attach(
+        f"Evaluation Model: {model}\nEnvironment: USE_MINI_MODEL={os.environ.get('USE_MINI_MODEL', '0')}",
+        name="🤖 Evaluation LLM設定",
+        attachment_type=allure.attachment_type.TEXT
+    )
 
     # モデルは現状固定（簡素化）
     llm = ChatOpenAI(
@@ -291,6 +306,7 @@ async def evaluate_task_result(
         timeout=OPENAI_TIMEOUT,
         max_retries=OPENAI_MAX_RETRIES
     )
+    print(Fore.CYAN + f"評価用モデル: {model}")
 
     # 実行ステップ履歴の文字列化
     steps_summary = ""
@@ -411,6 +427,7 @@ class MultiStageReplanner:
     def __init__(self, llm, knowhow: str):
         self.llm = llm
         self.knowhow = knowhow
+        self.model_name = llm.model_name if hasattr(llm, 'model_name') else "unknown"
     
     async def analyze_state(
         self,
@@ -467,6 +484,7 @@ class MultiStageReplanner:
 
         # 画像が無い場合はテキストのみ
         res = await self.llm.ainvoke([HumanMessage(content=content_blocks)])
+        print(Fore.MAGENTA + f"[MultiStageReplanner.analyze_state model: {self.model_name}] State analysis completed")
         return res.content.strip()
     
     async def decide_action(self, goal: str, original_plan: list, past_steps: list, state_summary: str) -> tuple:
@@ -502,6 +520,7 @@ class MultiStageReplanner:
         structured_llm = self.llm.with_structured_output(DecisionResult)
         try:
             result = await structured_llm.ainvoke(messages)
+            print(Fore.MAGENTA + f"[MultiStageReplanner.decide_action model: {self.model_name}] Decision: {result.decision}")
             decision_norm = result.decision.strip().upper()
             if decision_norm not in ("PLAN", "RESPONSE"):
                 decision_norm = "PLAN"  # 安全側フォールバック
@@ -552,6 +571,7 @@ class MultiStageReplanner:
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Plan)
         plan = await structured_llm.ainvoke(messages)
+        print(Fore.MAGENTA + f"[MultiStageReplanner.build_plan model: {self.model_name}] Plan created with {len(plan.steps)} steps")
         return plan
     
     async def build_response(self, goal: str, past_steps: list, state_summary: str) -> Response:
@@ -582,29 +602,34 @@ class MultiStageReplanner:
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Response)
         resp = await structured_llm.ainvoke(messages)
+        print(Fore.MAGENTA + f"[MultiStageReplanner.build_response model: {self.model_name}] Response created")
         return resp
 
 
 # --- シンプルなプランナークラス ---
 class SimplePlanner:
-    """テスト用のシンプルなプランナー"""
+    """テスト用のシンプルなプランナー（Multi-stage replanモード）"""
 
-    def __init__(self, pre_action_results: str = "", knowhow: str = KNOWHOW_INFO, multi_stage: bool = False, model_name: str = "gpt-4.1"):
+    def __init__(self, knowhow: str = KNOWHOW_INFO, model_name: str = MODEL_STANDARD):
         self.llm = ChatOpenAI(
             model=model_name,
             temperature=0,
             timeout=OPENAI_TIMEOUT,
             max_retries=OPENAI_MAX_RETRIES
         )
-        self.pre_action_results = pre_action_results
         self.knowhow = knowhow  # ノウハウ情報を保持
-        self.multi_stage = multi_stage  # Multi-stage モード
         self.model_name = model_name
         
         # Multi-stage用のreplanner初期化
-        if multi_stage:
-            self.replanner = MultiStageReplanner(self.llm, knowhow)
-            print(Fore.CYAN + f"🔀 Multi-stage replan モード有効 (model: {model_name})")
+        self.replanner = MultiStageReplanner(self.llm, knowhow)
+        print(Fore.CYAN + f"🔀 Multi-stage replan モード有効 (model: {model_name})")
+        
+        # Allureにモデル情報を記録
+        allure.attach(
+            f"Planner Model: {model_name}\nMode: Multi-stage replan",
+            name="🤖 SimplePlanner LLM設定",
+            attachment_type=allure.attachment_type.TEXT
+        )
 
     async def create_plan(
         self, user_input: str, locator: str = "", image_url: str = ""
@@ -619,7 +644,7 @@ class SimplePlanner:
         
         # 制約・ルールは最後に配置（最も重要な情報として強調）
         content += f"\n\n{self.knowhow}"
-        print(Fore.CYAN + f"\n\n\n\nSystem Message for create_plan:\n{content}\n")
+        print(Fore.CYAN + f"\n\n\n\n[model: {self.model_name}] System Message for create_plan:\n{content}\n")
 
         messages = [SystemMessage(content=content)]
 
@@ -687,16 +712,9 @@ class SimplePlanner:
         image_url: str = "",
         previous_image_url: str = "",
     ) -> Act:
-        
-        system_content = f"""あなたは計画の再評価と次のステップ決定を行うエキスパートです。
-以下のノウハウに従ってタスクを遂行してください。
-
-{self.knowhow}"""
-
-        # --- Multi-stage モード分岐 ---
-        if self.multi_stage:
+        # Multi-stage replan処理
             try:
-                print(Fore.CYAN + "🔀 Multi-stage replan: ステージ1（状態分析）")
+                print(Fore.CYAN + f"🔀 Multi-stage replan: ステージ1（状態分析） [model: {self.model_name}]")
                 state_summary = await self.replanner.analyze_state(
                     goal=state["input"],
                     original_plan=state["plan"],
@@ -749,110 +767,6 @@ class SimplePlanner:
                 else:
                     fallback_response = Response(response=f"エラー発生のため処理を中断します: {e}\n\n{RESULT_PASS}")
                     return Act(action=fallback_response)
-        
-        # --- 従来の単発モード ---
-        user_content = f"""あなたの目標: {state["input"]}
-元の計画: {str(state["plan"])}
-現在完了したステップ: {str(state["past_steps"])}
-
-重要な指示:
-1. メインの目標が完全に達成されているかを必ず分析してください
-2. メインの目標を完了するために残りのステップがある場合は、必ず残りのステップを含むPlanを返してください
-3. 全体の目標が100%完了し、これ以上のアクションが不要な場合のみResponseを返してください
-4. 次に必要なアクションが存在する場合は Response を返してはならない
-5. 次に必要なアクションが存在する場合はは、それをPlanに含めてください
-6. 前のステップでエラーが発生した場合は、それを考慮して代替アプローチを考えてください
-7. レスポンスを返すときは必ずレスポンスを返した理由を詳細に述べてください。画像の変化やロケーター情報の変化を含めることが重要です
-
-覚えておいてください: あなたの仕事は、現在の状態を観察するだけでなく、実行可能なステップを提供することです。"""
-
-        if locator:
-            # LLMには生のロケーター情報を渡す
-            user_content += f"\n\n現在の画面ロケーター情報: {locator}"
-            
-            # ログとAllureには整形したロケーター情報を出力
-            allure.attach(
-                locator,
-                name="📍 replan: ロケーター情報（整形済み）",
-                attachment_type=allure.attachment_type.TEXT
-            )
-
-        messages = [
-            SystemMessage(content=system_content),
-            HumanMessage(content=user_content)
-        ]
-
-        if image_url and previous_image_url:
-            # 前回と現在の画像両方がある場合
-            messages.append(
-                HumanMessage(
-                    content=[
-                        {"type": "image_url", "image_url": {"url": previous_image_url}},
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                        {
-                            "type": "text",
-                            "text": (
-                                "上記の2つの画像を比較してください。1枚目が前回のアクション実行前の画面、2枚目が現在の画面です。\n\n"
-                                "画面の変化を分析して以下を判断してください：\n"
-                                "1. 前回のアクションが成功したか失敗したか\n"
-                                "2. 期待された変化が起きているか\n"
-                                "3. エラーやローディング状態になっていないか\n"
-                                "4. 目標に向かって進捗があるか\n\n"
-                                "【最優先指示】\n"
-                                "画面変化の分析結果と現在のロケーター情報を踏まえて、目標を完了するための残りのステップを判断してください。\n\n"
-                                "⚠️ 重要：残りのステップが1つでも存在する場合は「必ずPlan」を返してください。Responseを返してはいけません。\n"
-                                "⚠️ 目標が100%完全に達成され、これ以上のアクションが一切不要な場合「のみ」Responseを返してください。\n\n"
-                                "分析の結果「残りのステップ」について言及している場合は、それは「Plan」を返すべきサインです。"
-                            ),
-                        },
-                    ]
-                )
-            )
-        elif image_url:
-            # 現在の画像のみの場合（初回など）
-            messages.append(
-                HumanMessage(
-                    content=[
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                        {
-                            "type": "text",
-                            "text": (
-                                "現在の画面状態（スクリーンショットとロケータの2つ）に基づいて、目標を完了するための残りのステップは何ですか？\n\n"
-                                "【最優先指示】\n"
-                                "⚠️ 重要：残りのステップが1つでも存在する場合は「必ずPlan」を返してください。Responseを返してはいけません。\n"
-                                "⚠️ 目標が100%完全に達成され、これ以上のアクションが一切不要な場合「のみ」Responseを返してください。\n\n"
-                                "分析の結果「残りのステップ」について言及している場合は、それは「Plan」を返すべきサインです。必ずロケーター情報も考慮してください。"
-                            ),
-                        },
-                    ]
-                )
-            )
-        else:
-            messages.append(
-                HumanMessage(
-                    content="目標を完了するための残りのステップは何ですか？残りのステップがある場合はPlanとして返してください。"
-                )
-            )
-
-        try:
-            structured_llm = self.llm.with_structured_output(Act)
-            act = await structured_llm.ainvoke(messages)
-            return act
-        except Exception as e:
-            err_type = type(e).__name__
-            print(Fore.RED + f"[replan] Exception: {err_type}: {e}")
-            allure.attach(
-                f"Exception Type: {err_type}\nLocation: SimplePlanner.replan\nMessage: {e}",
-                name="❌ replan Exception",
-                attachment_type=allure.attachment_type.TEXT
-            )
-            log_openai_error_to_allure(
-                error_type=err_type,
-                location="SimplePlanner.replan",
-                model=self.llm.model_name,
-                error=e
-            )
-            raise
 
 
 # --- ヘルパー関数 ---
@@ -1371,9 +1285,6 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             # 最初のセッション開始時にデバイス情報を取得して書き込む
             await write_device_info_once(driver)
 
-            # ツールを取得
-            pre_action_results = ""
-
             # 必要なツールを取得（リストから名前で検索）
             tools_list = appium_tools()
             tools_dict = {tool.name: tool for tool in tools_list}
@@ -1391,7 +1302,6 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                     try:
                         activate_result = await activate_app.ainvoke({"app_id": app_package})
                         print(f"appium_activate_app結果: {activate_result}")
-                        pre_action_results += f"appium_activate_app ツールを呼び出しました: {activate_result}\n"
                         print("アプリ起動待機中... (3秒)")
                         await asyncio.sleep(3)
                     except Exception as e:
@@ -1403,18 +1313,21 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                 print("アプリ起動待機中... (3秒)")
                 await asyncio.sleep(3)
 
-            get_current_app_result = await get_current_app.ainvoke({})
-            pre_action_results += f"現在のアクティブアプリ: {get_current_app_result}\n"
-            print(Fore.GREEN + f"pre_action_results: {pre_action_results}")
-
-            # 環境変数でmulti-stageモード判定
+            # 環境変数でモデル選択
             use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
             if use_mini_model:
-                model = "gpt-4.1-mini"
+                model = MODEL_MINI
             else:
-                model = "gpt-4.1"
+                model = MODEL_STANDARD
             
             print(Fore.CYAN + f"使用モデル: {model}")
+            
+            # Allureにモデル情報を記録
+            allure.attach(
+                f"Agent Executor Model: {model}\nEnvironment: USE_MINI_MODEL={os.environ.get('USE_MINI_MODEL', '0')}",
+                name="🤖 Agent Executor LLM設定",
+                attachment_type=allure.attachment_type.TEXT
+            )
 
             # エージェントエグゼキューターを作成（カスタムknowhowを使用）
             llm = ChatOpenAI(
@@ -1426,25 +1339,12 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。\n{knowhow}\n"""
 
             agent_executor = create_agent(llm, appium_tools(), system_prompt=prompt)
+            print(Fore.CYAN + f"Agent Executor用モデル: {model}")
 
-
-            
-            if use_mini_model:
-                print(Fore.CYAN + "🔀 Multi-stage replan モードで起動（gpt-4.1-mini使用）")
-                planner = SimplePlanner(
-                    pre_action_results, 
-                    knowhow, 
-                    multi_stage=True, 
-                    model_name="gpt-4.1-mini"
-                )
-            else:
-                print(Fore.CYAN + "📝 通常replanモードで起動（gpt-4.1使用）")
-                planner = SimplePlanner(
-                    pre_action_results, 
-                    knowhow, 
-                    multi_stage=True, 
-                    model_name="gpt-4.1"
-                )
+            planner = SimplePlanner(
+                knowhow, 
+                model_name=model
+            )
 
             # LLMに渡されるknowhow情報を表示
             print(Fore.MAGENTA + "=" * 60)
