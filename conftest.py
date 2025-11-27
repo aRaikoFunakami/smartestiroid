@@ -36,6 +36,17 @@ MODEL_MINI = "gpt-4.1-mini"       # Miniモデル（高速・低コスト）
 MODEL_EVALUATION = "gpt-5"        # 評価用モデル（標準時）
 MODEL_EVALUATION_MINI = "gpt-5-mini"  # 評価用モデル（Mini時）
 
+use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
+if use_mini_model:
+    planner_model = MODEL_MINI
+    execution_model = MODEL_MINI
+    evaluation_model = MODEL_EVALUATION_MINI
+else:
+    planner_model = MODEL_STANDARD
+    execution_model = MODEL_STANDARD
+    evaluation_model = MODEL_EVALUATION
+
+
 # Result status constants
 RESULT_PASS = "RESULT_PASS"
 RESULT_SKIP = "RESULT_SKIP"
@@ -285,19 +296,8 @@ async def evaluate_task_result(
     task_input: str, response: str, executed_steps: list = None
 ) -> str:
     """タスク結果を構造化評価し RESULT_PASS / RESULT_SKIP / RESULT_NG を厳密返却する"""
-    use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
-    if use_mini_model:
-        print(Fore.CYAN + "🔀 Miniモデルによる再評価モード有効")
-        model = MODEL_EVALUATION_MINI
-    else:
-        model = MODEL_EVALUATION
-
-    # Allureにevaluation用モデル情報を記録
-    allure.attach(
-        f"Evaluation Model: {model}\nEnvironment: USE_MINI_MODEL={os.environ.get('USE_MINI_MODEL', '0')}",
-        name="🤖 Evaluation LLM Model",
-        attachment_type=allure.attachment_type.TEXT
-    )
+    # 使用モデルの決定
+    model = evaluation_model
 
     # モデルは現状固定（簡素化）
     llm = ChatOpenAI(
@@ -623,13 +623,6 @@ class SimplePlanner:
         # Multi-stage用のreplanner初期化
         self.replanner = MultiStageReplanner(self.llm, knowhow)
         print(Fore.CYAN + f"🔀 Multi-stage replan モード有効 (model: {model_name})")
-        
-        # Allureにモデル情報を記録
-        allure.attach(
-            f"Planner Model: {model_name}\nMode: Multi-stage replan",
-            name="🤖 SimplePlanner LLM Model",
-            attachment_type=allure.attachment_type.TEXT
-        )
 
     async def create_plan(
         self, user_input: str, locator: str = "", image_url: str = ""
@@ -734,7 +727,7 @@ class SimplePlanner:
                     state_summary=state_summary
                 )
                 print(Fore.CYAN + f"判定結果: {decision}\n理由: {reason}")
-                allure.attach(f"DECISION: {decision}\n{reason}", name="⚖️ Action Decision", attachment_type=allure.attachment_type.TEXT)
+                allure.attach(f"DECISION: {decision}\n{reason}", name=f"⚖️ Action Decision [model: {self.model_name}]", attachment_type=allure.attachment_type.TEXT)
                 
                 print(Fore.CYAN + "🔀 Multi-stage replan: STAGE 3（Output Generation）")
                 if decision == "RESPONSE":
@@ -906,7 +899,7 @@ def create_workflow_functions(
                 print(Fore.RED + log_text)
                 allure.attach(
                     task,
-                    name="Step",
+                    name=f"Step [model: {execution_model}]",
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
@@ -916,7 +909,7 @@ def create_workflow_functions(
 
                 allure.attach(
                     agent_response["messages"][-1].content,
-                    name="Response",
+                    name=f"Response [model: {execution_model}]",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 elapsed = time.time() - start_time
@@ -998,13 +991,13 @@ def create_workflow_functions(
 
                 allure.attach(
                     str(plan.steps),
-                    name="🎯Plan",
+                    name=f"🎯Plan [model: {planner_model}]",
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
                 allure.attach(
                     plan.reasoning, 
-                    name="🧠 Plan Reasoning", 
+                    name=f"🧠 Plan Reasoning [model: {planner_model}]", 
                     attachment_type=allure.attachment_type.TEXT
                 )
 
@@ -1138,7 +1131,7 @@ def create_workflow_functions(
 
                     allure.attach(
                         evaluated_response,
-                        name="Final Evalution",
+                        name=f"Final Evalution [model: {planner_model}]",
                         attachment_type=allure.attachment_type.TEXT,
                     )
 
@@ -1155,7 +1148,7 @@ def create_workflow_functions(
                 else:
                     allure.attach(
                         str(output.action.steps),
-                        name="🧠 Replan Steps",
+                        name=f"🧠 Replan Steps [model: {planner_model}]",
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     elapsed = time.time() - start_time
@@ -1314,24 +1307,11 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                 await asyncio.sleep(3)
 
             # 環境変数でモデル選択
-            use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
-            if use_mini_model:
-                model = MODEL_MINI
-            else:
-                model = MODEL_STANDARD
-            
-            print(Fore.CYAN + f"使用モデル: {model}")
-            
-            # Allureにモデル情報を記録
-            allure.attach(
-                f"Agent Executor Model: {model}\nEnvironment: USE_MINI_MODEL={os.environ.get('USE_MINI_MODEL', '0')}",
-                name="🤖 Agent Executor LLM model",
-                attachment_type=allure.attachment_type.TEXT
-            )
+            print(Fore.CYAN + f"使用モデル: {execution_model}")
 
             # エージェントエグゼキューターを作成（カスタムknowhowを使用）
             llm = ChatOpenAI(
-                model=model,
+                model=execution_model,
                 temperature=0,
                 timeout=OPENAI_TIMEOUT,
                 max_retries=OPENAI_MAX_RETRIES
@@ -1339,11 +1319,11 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。\n{knowhow}\n"""
 
             agent_executor = create_agent(llm, appium_tools(), system_prompt=prompt)
-            print(Fore.CYAN + f"Agent Executor用モデル: {model}")
+            print(Fore.CYAN + f"Agent Executor用モデル: {execution_model}")
 
             planner = SimplePlanner(
                 knowhow, 
-                model_name=model
+                model_name=planner_model,
             )
 
             # LLMに渡されるknowhow情報を表示
