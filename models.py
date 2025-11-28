@@ -58,9 +58,14 @@ class Act(BaseModel):
     
     Attributes:
         action: Either a Response (to answer user) or Plan (to execute more steps)
+        state_analysis: Optional state analysis result from replanner
     """
     action: Union[Response, Plan] = Field(
         description="実行するアクション。ユーザーに応答する場合はResponse、さらにツールを使用してタスクを実行する場合はPlanを使用してください。"
+    )
+    state_analysis: Optional[str] = Field(
+        default=None,
+        description="リプランナーによる状態分析結果"
     )
 
 

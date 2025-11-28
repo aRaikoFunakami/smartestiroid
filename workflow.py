@@ -338,7 +338,7 @@ def create_workflow_functions(
                 )
 
                 # 前回画像と現在画像を使ってリプラン
-                output = await planner.replan(
+                replan_result = await planner.replan(
                     state, locator, image_url, previous_image_url
                 )
 
@@ -346,30 +346,38 @@ def create_workflow_functions(
                 image_cache["previous_image_url"] = image_url
                 print(
                     Fore.YELLOW
-                    + f"Replanner Output (replan #{current_replan_count + 1}): {output}"
+                    + f"Replanner Output (replan #{current_replan_count + 1}): {replan_result}"
                 )
 
-                if isinstance(output.action, Response):
+                if isinstance(replan_result.action, Response):
                     allure.attach(
-                        f"Status: {output.action.status}\n\nReason:\n{output.action.reason}",
+                        f"Status: {replan_result.action.status}\n\nReason:\n{replan_result.action.reason}",
                         name="Replan Response",
                         attachment_type=allure.attachment_type.TEXT,
                     )
 
-                    evaluated_response = f"{output.action.reason}\n\n{output.action.status}"
+                    evaluated_response = f"{replan_result.action.reason}\n\n{replan_result.action.status}"
 
                     # 合格判定した場合はその合格判定が正しいかを再評価する
                     # 人間の目視確認が必要な場合はSKIPにする
                     from config import RESULT_PASS
-                    if RESULT_PASS in output.action.status:
+                    if RESULT_PASS in replan_result.action.status:
                         # 期待動作の抽出（state.inputから期待基準を取得）
                         task_input = state.get("input", "")
 
-                        # 合否判定ロジックを適用（ステップ履歴も含めて）
+                        # リプランナーの判断内容（status, reason）
+                        replanner_judgment = f"Status: {replan_result.action.status}\nReason: {replan_result.action.reason}"
+                        
+                        # リプランナーの状態分析結果
+                        state_analysis = replan_result.state_analysis or ""
+
+                        # 合否判定ロジックを適用（ステップ履歴・リプランナー判断・状態分析を含めて）
                         evaluated_response = await evaluate_task_result_func(
                             task_input,
                             evaluated_response,
                             step_history["executed_steps"],
+                            replanner_judgment,
+                            state_analysis,
                         )
 
                     allure.attach(
@@ -390,9 +398,9 @@ def create_workflow_functions(
                     }
                 else:
                     # ステップを番号付きリストに整形し、reasoning も含める
-                    formatted_steps = "\n".join(f"{i+1}. {step}" for i, step in enumerate(output.action.steps))
-                    if hasattr(output.action, 'reasoning') and output.action.reasoning:
-                        formatted_output = f"【計画の根拠】\n{output.action.reasoning}\n\n【実行ステップ】\n{formatted_steps}"
+                    formatted_steps = "\n".join(f"{i+1}. {step}" for i, step in enumerate(replan_result.action.steps))
+                    if hasattr(replan_result.action, 'reasoning') and replan_result.action.reasoning:
+                        formatted_output = f"【計画の根拠】\n{replan_result.action.reasoning}\n\n【実行ステップ】\n{formatted_steps}"
                     else:
                         formatted_output = formatted_steps
                         
@@ -408,7 +416,7 @@ def create_workflow_functions(
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     return {
-                        "plan": output.action.steps,
+                        "plan": replan_result.action.steps,
                         "replan_count": current_replan_count + 1,
                     }
             except Exception as e:

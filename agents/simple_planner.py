@@ -170,7 +170,7 @@ class SimplePlanner:
                         state_summary=state_summary
                     )
                     print(Fore.GREEN + f"✅ Response生成完了: [{response.status}] {response.reason[:100]}...")
-                    return Act(action=response)
+                    return Act(action=response, state_analysis=state_summary)
                 else:
                     plan = await self.replanner.build_plan(
                         goal=state["input"],
@@ -179,7 +179,7 @@ class SimplePlanner:
                         state_summary=state_summary
                     )
                     print(Fore.YELLOW + f"📋 Plan生成完了: {len(plan.steps)}ステップ")
-                    return Act(action=plan)
+                    return Act(action=plan, state_analysis=state_summary)
             
             except Exception as e:
                 print(Fore.RED + f"⚠️ Multi-stage replan エラー: {e}")

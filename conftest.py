@@ -227,9 +227,18 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 async def evaluate_task_result(
-    task_input: str, response: str, executed_steps: list = None, token_callback=None
+    task_input: str, response: str, executed_steps: list = None, replanner_judgment: str = None, state_analysis: str = None, token_callback=None
 ) -> str:
-    """タスク結果を構造化評価し RESULT_PASS / RESULT_SKIP / RESULT_FAIL を厳密返却する"""
+    """タスク結果を構造化評価し RESULT_PASS / RESULT_SKIP / RESULT_FAIL を厳密返却する
+    
+    Args:
+        task_input: 元のタスク指示
+        response: 最終応答
+        executed_steps: 実行されたステップ履歴
+        replanner_judgment: リプランナーがRESPONSEと判断したときの内容（status, reason）
+        state_analysis: リプランナーによる状態分析結果
+        token_callback: トークンカウンターコールバック
+    """
     # 使用モデルの決定
     model = evaluation_model
 
@@ -251,34 +260,39 @@ async def evaluate_task_result(
             success_mark = "✓" if step_info["success"] else "✗"
             steps_summary += f"{i}. {success_mark} {step_info['step']}\n"
 
-    print(f"【実行されたステップ履歴】\n{steps_summary}")
-
     evaluation_prompt = f"""
 あなたはテスト結果判定のエキスパートです。以下を厳密に検証し JSON のみで返答してください。
 
-【元タスク指示】
+# 元タスク指示:
 {task_input}
 
-【実行ステップ履歴】
+# 実行ステップ履歴:
 {steps_summary or '(なし)'}
 
-【最終応答】
+# 現在の画面状態分析結果:
+{state_analysis}
+
+# リプランナーの判断結果:
+{replanner_judgment}
+
+# 最終応答:
 {response}
 
-判定規則:
+# 判定規則:
 1. {RESULT_PASS} の条件:
     - 指示手順を過不足なく実行
     - 不要/逸脱ステップなし
-    - 初期設定ダイアログ対応や広告ダイアログ対応は不要/逸脱ステップに含めない
     - 応答内に期待基準へ直接対応する具体的根拠（要素ID / text / 画像説明 / 操作結果）が存在
     - 画像評価が必要なケースではその根拠を言及
+    - 以下の対応は、本タスクの評価対象外とし、不要あるいは逸脱ステップとして扱わない：プライバシーポリシー、ディスクレーマー、初期設定ダイアログ、広告ダイアログ など
+
 2. {RESULT_SKIP} の条件:
     - 根拠が曖昧 / 反証不能 / 主観的
     - 必要手順不足 or 余計な操作あり
     - ロケータ / 画像確認が必要なのに不十分
     - エラー / 不整合 / 判定困難
 
-出力仕様:
+# 出力仕様:
 厳密JSON
 """
     print(Fore.CYAN + "[evaluate_task_result] 評価プロンプトを生成")
@@ -441,8 +455,8 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             max_replan_count = 20
             
             # evaluate_task_resultをラップしてtoken_callbackを渡す
-            async def evaluate_with_token_callback(task_input, response, executed_steps):
-                return await evaluate_task_result(task_input, response, executed_steps, token_callback)
+            async def evaluate_with_token_callback(task_input, response, executed_steps, replanner_judgment=None, state_analysis=None):
+                return await evaluate_task_result(task_input, response, executed_steps, replanner_judgment, state_analysis, token_callback)
             
             execute_step, plan_step, replan_step, should_end = (
                 create_workflow_functions(
