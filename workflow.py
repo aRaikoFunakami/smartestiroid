@@ -22,6 +22,7 @@ def create_workflow_functions(
     evaluate_task_result_func,
     max_replan_count: int = 10,
     knowhow: str = KNOWHOW_INFO,
+    token_callback=None,
 ):
     """ワークフロー関数を作成する（セッション内のツールを使用）
 
@@ -33,6 +34,7 @@ def create_workflow_functions(
         evaluate_task_result_func: タスク結果評価関数
         max_replan_count: 最大リプラン回数（デフォルト10回）
         knowhow: ノウハウ情報（SimplePlannerに渡される）
+        token_callback: トークンカウンターコールバック
         
     Returns:
         tuple: (execute_step, plan_step, replan_step, should_end)
@@ -100,21 +102,49 @@ def create_workflow_functions(
             
             try:
                 # 画像がある場合はマルチモーダルメッセージとして送信
-                if image_url:
-                    agent_response = await agent_executor.ainvoke(
-                        {"messages": [HumanMessage(
-                            content=[
-                                {"type": "text", "text": task_formatted},
-                                {"type": "image_url", "image_url": {"url": image_url}}
-                            ]
-                        )]},
-                        config={"callbacks": [tool_callback]}
-                    )
+                # token_callbackはLLM初期化時に設定済みなので、ここではtool_callbackのみ渡す
+                if token_callback:
+                    with token_callback.track_query() as query:
+                        if image_url:
+                            agent_response = await agent_executor.ainvoke(
+                                {"messages": [HumanMessage(
+                                    content=[
+                                        {"type": "text", "text": task_formatted},
+                                        {"type": "image_url", "image_url": {"url": image_url}}
+                                    ]
+                                )]},
+                                config={"callbacks": [tool_callback]}
+                            )
+                        else:
+                            agent_response = await agent_executor.ainvoke(
+                                {"messages": [("user", task_formatted)]},
+                                config={"callbacks": [tool_callback]}
+                            )
+                        
+                        report = query.report()
+                        if report:
+                            print(Fore.YELLOW + f"[execute_step] {report}")
+                            allure.attach(
+                                report,
+                                name="💰 Execute Step Query Token Usage",
+                                attachment_type=allure.attachment_type.TEXT
+                            )
                 else:
-                    agent_response = await agent_executor.ainvoke(
-                        {"messages": [("user", task_formatted)]},
-                        config={"callbacks": [tool_callback]}
-                    )
+                    if image_url:
+                        agent_response = await agent_executor.ainvoke(
+                            {"messages": [HumanMessage(
+                                content=[
+                                    {"type": "text", "text": task_formatted},
+                                    {"type": "image_url", "image_url": {"url": image_url}}
+                                ]
+                            )]},
+                            config={"callbacks": [tool_callback]}
+                        )
+                    else:
+                        agent_response = await agent_executor.ainvoke(
+                            {"messages": [("user", task_formatted)]},
+                            config={"callbacks": [tool_callback]}
+                        )
 
                 log_text = f"ステップ '{task}' のエージェント応答: {agent_response['messages'][-1].content}"
                 print(Fore.RED + log_text)

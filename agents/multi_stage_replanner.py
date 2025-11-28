@@ -16,10 +16,11 @@ from config import RESULT_PASS, RESULT_FAIL
 class MultiStageReplanner:
     """3段階に分けてreplanを実行するクラス（miniモデル用）"""
     
-    def __init__(self, llm, knowhow: str):
+    def __init__(self, llm, knowhow: str, token_callback=None):
         self.llm = llm
         self.knowhow = knowhow
         self.model_name = llm.model_name if hasattr(llm, 'model_name') else "unknown"
+        self.token_callback = token_callback  # track_query()用に保持
     
     async def analyze_state(
         self,
@@ -91,7 +92,20 @@ class MultiStageReplanner:
             content_blocks.append({"type": "image_url", "image_url": {"url": current_image_url}})
 
         # 画像が無い場合はテキストのみ
-        res = await self.llm.ainvoke([HumanMessage(content=content_blocks)])
+        if self.token_callback:
+            with self.token_callback.track_query() as query:
+                res = await self.llm.ainvoke([HumanMessage(content=content_blocks)])
+                report = query.report()
+                if report:
+                    print(Fore.YELLOW + f"[analyze_state] {report}")
+                    allure.attach(
+                        report,
+                        name="💰 Analyze State Query Token Usage",
+                        attachment_type=allure.attachment_type.TEXT
+                    )
+        else:
+            res = await self.llm.ainvoke([HumanMessage(content=content_blocks)])
+        
         print(Fore.MAGENTA + f"[MultiStageReplanner.analyze_state model: {self.model_name}] State analysis completed")
         return res.content.strip()
     
@@ -127,7 +141,20 @@ class MultiStageReplanner:
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(DecisionResult)
         try:
-            result = await structured_llm.ainvoke(messages)
+            if self.token_callback:
+                with self.token_callback.track_query() as query:
+                    result = await structured_llm.ainvoke(messages)
+                    report = query.report()
+                    if report:
+                        print(Fore.YELLOW + f"[decide_action] {report}")
+                        allure.attach(
+                            report,
+                            name="💰 Decide Action Query Token Usage",
+                            attachment_type=allure.attachment_type.TEXT
+                        )
+            else:
+                result = await structured_llm.ainvoke(messages)
+            
             print(Fore.MAGENTA + f"[MultiStageReplanner.decide_action model: {self.model_name}] Decision: {result.decision}")
             decision_norm = result.decision.strip().upper()
             if decision_norm not in ("PLAN", "RESPONSE"):
@@ -180,7 +207,21 @@ class MultiStageReplanner:
         
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Plan)
-        plan = await structured_llm.ainvoke(messages)
+        
+        if self.token_callback:
+            with self.token_callback.track_query() as query:
+                plan = await structured_llm.ainvoke(messages)
+                report = query.report()
+                if report:
+                    print(Fore.YELLOW + f"[build_plan] {report}")
+                    allure.attach(
+                        report,
+                        name="💰 Build Plan Query Token Usage",
+                        attachment_type=allure.attachment_type.TEXT
+                    )
+        else:
+            plan = await structured_llm.ainvoke(messages)
+        
         print(Fore.MAGENTA + f"[MultiStageReplanner.build_plan model: {self.model_name}] Plan created with {len(plan.steps)} steps")
         return plan
     
@@ -211,6 +252,20 @@ class MultiStageReplanner:
         
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Response)
-        resp = await structured_llm.ainvoke(messages)
+        
+        if self.token_callback:
+            with self.token_callback.track_query() as query:
+                resp = await structured_llm.ainvoke(messages)
+                report = query.report()
+                if report:
+                    print(Fore.YELLOW + f"[build_response] {report}")
+                    allure.attach(
+                        report,
+                        name="💰 Build Response Query Token Usage",
+                        attachment_type=allure.attachment_type.TEXT
+                    )
+        else:
+            resp = await structured_llm.ainvoke(messages)
+        
         print(Fore.MAGENTA + f"[MultiStageReplanner.build_response model: {self.model_name}] Response created: {resp.status}")
         return resp

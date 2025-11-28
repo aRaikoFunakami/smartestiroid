@@ -16,7 +16,7 @@ import asyncio
 import time
 
 from appium_tools import appium_driver, appium_tools
-from langchain_core.callbacks import BaseCallbackHandler
+from appium_tools.token_counter import TiktokenCountCallback
 
 # Import from newly created modules
 from models import (
@@ -116,18 +116,20 @@ def pytest_configure(config):
 
 
 async def evaluate_task_result(
-    task_input: str, response: str, executed_steps: list = None
+    task_input: str, response: str, executed_steps: list = None, token_callback=None
 ) -> str:
     """タスク結果を構造化評価し RESULT_PASS / RESULT_SKIP / RESULT_FAIL を厳密返却する"""
     # 使用モデルの決定
     model = evaluation_model
 
     # モデルは現状固定（簡素化）
+    callbacks = [token_callback] if token_callback else []
     llm = ChatOpenAI(
         model=model,
         temperature=0,
         timeout=OPENAI_TIMEOUT,
-        max_retries=OPENAI_MAX_RETRIES
+        max_retries=OPENAI_MAX_RETRIES,
+        callbacks=callbacks if callbacks else None
     )
     print(Fore.CYAN + f"評価用モデル: {model}")
 
@@ -177,7 +179,21 @@ async def evaluate_task_result(
             HumanMessage(content=evaluation_prompt),
         ]
         structured_llm = llm.with_structured_output(EvaluationResult)
-        eval_struct: EvaluationResult = await structured_llm.ainvoke(messages)
+        
+        # track_query()でクエリごとのトークン使用量を記録
+        if token_callback:
+            with token_callback.track_query() as query:
+                eval_struct: EvaluationResult = await structured_llm.ainvoke(messages)
+                report = query.report()
+                if report:
+                    print(Fore.YELLOW + f"[evaluate_task_result] {report}")
+                    allure.attach(
+                        report,
+                        name="💰 Evaluation Query Token Usage",
+                        attachment_type=allure.attachment_type.TEXT
+                    )
+        else:
+            eval_struct: EvaluationResult = await structured_llm.ainvoke(messages)
 
         status = eval_struct.status
         reason = eval_struct.reason.strip()
@@ -289,12 +305,16 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             # 環境変数でモデル選択
             print(Fore.CYAN + f"使用モデル: {execution_model}")
 
+            # トークンカウンターコールバックを作成
+            token_callback = TiktokenCountCallback(model=execution_model)
+
             # エージェントエグゼキューターを作成（カスタムknowhowを使用）
             llm = ChatOpenAI(
                 model=execution_model,
                 temperature=0,
                 timeout=OPENAI_TIMEOUT,
-                max_retries=OPENAI_MAX_RETRIES
+                max_retries=OPENAI_MAX_RETRIES,
+                callbacks=[token_callback]
             )
             prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。\n{knowhow}\n"""
 
@@ -304,6 +324,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             planner = SimplePlanner(
                 knowhow, 
                 model_name=planner_model,
+                token_callback=token_callback
             )
 
             # LLMに渡されるknowhow情報を表示
@@ -315,15 +336,21 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
 
             # ワークフロー関数を作成（セッション内のツールを使用）
             max_replan_count = 20
+            
+            # evaluate_task_resultをラップしてtoken_callbackを渡す
+            async def evaluate_with_token_callback(task_input, response, executed_steps):
+                return await evaluate_task_result(task_input, response, executed_steps, token_callback)
+            
             execute_step, plan_step, replan_step, should_end = (
                 create_workflow_functions(
                     planner,
                     agent_executor,
                     screenshot_tool,
                     generate_locators,
-                    evaluate_task_result,
+                    evaluate_with_token_callback,
                     max_replan_count,
                     knowhow,
+                    token_callback,
                 )
             )
 
@@ -342,6 +369,16 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             try:
                 yield graph
             finally:
+                # テスト終了時のトークン使用量サマリーを出力
+                summary = token_callback.format_session_summary()
+                if summary:
+                    print(Fore.GREEN + "\n" + summary)
+                    allure.attach(
+                        summary,
+                        name="💰 Test Token Usage Summary",
+                        attachment_type=allure.attachment_type.TEXT
+                    )
+                
                 # セッション終了前にアプリを終了
                 app_package = capabilities.get("appium:appPackage")
                 dont_stop_app_on_reset = capabilities.get("appium:dontStopAppOnReset")

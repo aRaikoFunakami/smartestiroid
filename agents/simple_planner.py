@@ -21,18 +21,21 @@ from utils.allure_logger import log_openai_error_to_allure
 class SimplePlanner:
     """テスト用のシンプルなプランナー（Multi-stage replanモード）"""
 
-    def __init__(self, knowhow: str = KNOWHOW_INFO, model_name: str = MODEL_STANDARD):
+    def __init__(self, knowhow: str = KNOWHOW_INFO, model_name: str = MODEL_STANDARD, token_callback=None):
+        callbacks = [token_callback] if token_callback else []
         self.llm = ChatOpenAI(
             model=model_name,
             temperature=0,
             timeout=OPENAI_TIMEOUT,
-            max_retries=OPENAI_MAX_RETRIES
+            max_retries=OPENAI_MAX_RETRIES,
+            callbacks=callbacks if callbacks else None
         )
         self.knowhow = knowhow  # ノウハウ情報を保持
         self.model_name = model_name
+        self.token_callback = token_callback  # track_query()用に保持
         
-        # Multi-stage用のreplanner初期化
-        self.replanner = MultiStageReplanner(self.llm, knowhow)
+        # Multi-stage用のreplanner初期化（token_callbackを渡す）
+        self.replanner = MultiStageReplanner(self.llm, knowhow, token_callback)
         print(Fore.CYAN + f"🔀 Multi-stage replan モード有効 (model: {model_name})")
 
     async def create_plan(
@@ -102,7 +105,22 @@ class SimplePlanner:
 
         try:
             structured_llm = self.llm.with_structured_output(Plan)
-            plan = await structured_llm.ainvoke(messages)
+            
+            # track_query()でクエリごとのトークン使用量を記録
+            if self.token_callback:
+                with self.token_callback.track_query() as query:
+                    plan = await structured_llm.ainvoke(messages)
+                    report = query.report()
+                    if report:
+                        print(Fore.YELLOW + f"[create_plan] {report}")
+                        allure.attach(
+                            report,
+                            name="💰 Create Plan Query Token Usage",
+                            attachment_type=allure.attachment_type.TEXT
+                        )
+            else:
+                plan = await structured_llm.ainvoke(messages)
+            
             return plan
         
         except Exception as e:
