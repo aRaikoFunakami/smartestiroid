@@ -91,11 +91,8 @@ class MultiStageReplanner:
         if current_image_url:
             content_blocks.append({"type": "image_url", "image_url": {"url": current_image_url}})
 
-        # 画像が無い場合はテキストのみ
-        if self.token_callback:
-            with self.token_callback.track_query():
-                res = await self.llm.ainvoke([HumanMessage(content=content_blocks)])
-        else:
+        # track_query()でクエリごとのトークン使用量を記録
+        with self.token_callback.track_query():
             res = await self.llm.ainvoke([HumanMessage(content=content_blocks)])
         
         print(Fore.MAGENTA + f"[MultiStageReplanner.analyze_state model: {self.model_name}] State analysis completed")

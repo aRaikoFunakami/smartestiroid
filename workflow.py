@@ -101,41 +101,17 @@ def create_workflow_functions(
 {locator}"""
             
             try:
-                # 画像がある場合はマルチモーダルメッセージとして送信
-                # token_callbackはLLM初期化時に設定済みなので、ここではtool_callbackのみ渡す
-                if token_callback:
-                    with token_callback.track_query():
-                        if image_url:
-                            agent_response = await agent_executor.ainvoke(
-                                {"messages": [HumanMessage(
-                                    content=[
-                                        {"type": "text", "text": task_formatted},
-                                        {"type": "image_url", "image_url": {"url": image_url}}
-                                    ]
-                                )]},
-                                config={"callbacks": [tool_callback]}
-                            )
-                        else:
-                            agent_response = await agent_executor.ainvoke(
-                                {"messages": [("user", task_formatted)]},
-                                config={"callbacks": [tool_callback]}
-                            )
-                else:
-                    if image_url:
-                        agent_response = await agent_executor.ainvoke(
-                            {"messages": [HumanMessage(
-                                content=[
-                                    {"type": "text", "text": task_formatted},
-                                    {"type": "image_url", "image_url": {"url": image_url}}
-                                ]
-                            )]},
-                            config={"callbacks": [tool_callback]}
-                        )
-                    else:
-                        agent_response = await agent_executor.ainvoke(
-                            {"messages": [("user", task_formatted)]},
-                            config={"callbacks": [tool_callback]}
-                        )
+                # マルチモーダルメッセージとして送信（画像付き）
+                with token_callback.track_query():
+                    agent_response = await agent_executor.ainvoke(
+                        {"messages": [HumanMessage(
+                            content=[
+                                {"type": "text", "text": task_formatted},
+                                {"type": "image_url", "image_url": {"url": image_url}}
+                            ]
+                        )]},
+                        config={"callbacks": [tool_callback]}
+                    )
 
                 log_text = f"ステップ '{task}' のエージェント応答: {agent_response['messages'][-1].content}"
                 print(Fore.RED + log_text)

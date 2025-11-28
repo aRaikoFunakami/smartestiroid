@@ -305,11 +305,8 @@ async def evaluate_task_result(
         ]
         structured_llm = llm.with_structured_output(EvaluationResult)
         
-        # track_query()でクエリごとのトークン使用量を記録（Allure添付やprintは行わない）
-        if token_callback:
-            with token_callback.track_query():
-                eval_struct: EvaluationResult = await structured_llm.ainvoke(messages)
-        else:
+        # track_query()でクエリごとのトークン使用量を記録
+        with token_callback.track_query():
             eval_struct: EvaluationResult = await structured_llm.ainvoke(messages)
 
         status = eval_struct.status

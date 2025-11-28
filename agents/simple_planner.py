@@ -106,10 +106,7 @@ class SimplePlanner:
             structured_llm = self.llm.with_structured_output(Plan)
             
             # track_query()でクエリごとのトークン使用量を記録
-            if self.token_callback:
-                with self.token_callback.track_query():
-                    plan = await structured_llm.ainvoke(messages)
-            else:
+            with self.token_callback.track_query():
                 plan = await structured_llm.ainvoke(messages)
             
             return plan
