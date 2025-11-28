@@ -45,7 +45,6 @@ class SimplePlanner:
         content = """与えられた目標に対して、シンプルかつ必要最小限のステップバイステップ計画を作成してください。
     この計画は、正しく実行されれば期待結果を得られる個別のタスクで構成される必要があります。
     不要・重複・曖昧・推測的なステップは入れないでください。最終ステップの結果が最終的な答えとなります。
-    各ステップに必要十分な情報（対象要素/操作/条件）が含まれていることを確認し、省略や飛ばしを行わないでください。
     また、なぜそのステップ列が最適かを短く根拠説明してください。
     """
         
@@ -108,16 +107,8 @@ class SimplePlanner:
             
             # track_query()でクエリごとのトークン使用量を記録
             if self.token_callback:
-                with self.token_callback.track_query() as query:
+                with self.token_callback.track_query():
                     plan = await structured_llm.ainvoke(messages)
-                    report = query.report()
-                    if report:
-                        print(Fore.YELLOW + f"[create_plan] {report}")
-                        allure.attach(
-                            report,
-                            name="💰 Create Plan Query Token Usage",
-                            attachment_type=allure.attachment_type.TEXT
-                        )
             else:
                 plan = await structured_llm.ainvoke(messages)
             

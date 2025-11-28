@@ -104,7 +104,7 @@ def create_workflow_functions(
                 # 画像がある場合はマルチモーダルメッセージとして送信
                 # token_callbackはLLM初期化時に設定済みなので、ここではtool_callbackのみ渡す
                 if token_callback:
-                    with token_callback.track_query() as query:
+                    with token_callback.track_query():
                         if image_url:
                             agent_response = await agent_executor.ainvoke(
                                 {"messages": [HumanMessage(
@@ -119,15 +119,6 @@ def create_workflow_functions(
                             agent_response = await agent_executor.ainvoke(
                                 {"messages": [("user", task_formatted)]},
                                 config={"callbacks": [tool_callback]}
-                            )
-                        
-                        report = query.report()
-                        if report:
-                            print(Fore.YELLOW + f"[execute_step] {report}")
-                            allure.attach(
-                                report,
-                                name="💰 Execute Step Query Token Usage",
-                                attachment_type=allure.attachment_type.TEXT
                             )
                 else:
                     if image_url:
@@ -154,9 +145,6 @@ def create_workflow_functions(
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
-                # ツール呼び出し履歴を Allure に保存
-                tool_callback.save_to_allure(step_name=task)
-                tool_callback.clear()
 
                 allure.attach(
                     agent_response["messages"][-1].content,

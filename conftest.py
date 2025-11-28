@@ -134,9 +134,8 @@ def pytest_sessionfinish(session, exitstatus):
     print(Fore.CYAN + "📊 Generating Global Token Usage Report")
     print(Fore.CYAN + "="*70)
     
-    # グローバル統計をコンソールに出力
+    # グローバル統計のテキストはコンソールに出力しない
     global_summary_text = TiktokenCountCallback.format_global_summary()
-    print(Fore.GREEN + global_summary_text)
     
     # Allureレポートディレクトリの確認
     allure_results_dir = session.config.option.allure_report_dir
@@ -292,18 +291,10 @@ async def evaluate_task_result(
         ]
         structured_llm = llm.with_structured_output(EvaluationResult)
         
-        # track_query()でクエリごとのトークン使用量を記録
+        # track_query()でクエリごとのトークン使用量を記録（Allure添付やprintは行わない）
         if token_callback:
-            with token_callback.track_query() as query:
+            with token_callback.track_query():
                 eval_struct: EvaluationResult = await structured_llm.ainvoke(messages)
-                report = query.report()
-                if report:
-                    print(Fore.YELLOW + f"[evaluate_task_result] {report}")
-                    allure.attach(
-                        report,
-                        name="💰 Evaluation Query Token Usage",
-                        attachment_type=allure.attachment_type.TEXT
-                    )
         else:
             eval_struct: EvaluationResult = await structured_llm.ainvoke(messages)
 
@@ -481,15 +472,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             try:
                 yield graph
             finally:
-                # テスト終了時のトークン使用量サマリーを出力
-                summary = token_callback.format_session_summary()
-                if summary:
-                    print(Fore.GREEN + "\n" + summary)
-                    allure.attach(
-                        summary,
-                        name="💰 Test Token Usage Summary",
-                        attachment_type=allure.attachment_type.TEXT
-                    )
+                # 最小限: セッションのグローバル保存のみ（表示や添付はしない）
                 
                 # グローバル統計に保存（テストケースIDをラベルとして使用）
                 try:
@@ -501,9 +484,8 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                     
                     # グローバル履歴に保存
                     token_callback.save_session_to_global(test_id)
-                    print(Fore.YELLOW + f"💾 Token stats saved to global history: {test_id}")
-                except Exception as e:
-                    print(Fore.YELLOW + f"⚠️  グローバル統計保存エラー: {e}")
+                except Exception:
+                    pass
                 
                 # セッション終了前にアプリを終了
                 app_package = capabilities.get("appium:appPackage")
