@@ -145,6 +145,9 @@ def create_workflow_functions(
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
+                # ツール呼び出し履歴を Allure に保存
+                tool_callback.save_to_allure(step_name=task)
+                tool_callback.clear()
 
                 allure.attach(
                     agent_response["messages"][-1].content,
