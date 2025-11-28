@@ -115,6 +115,118 @@ def pytest_configure(config):
     sys._pytest_testsheet_path = config.getoption("--testsheet")
 
 
+def pytest_runtest_setup(item):
+    """各テスト実行前に現在のテストアイテムを保存"""
+    import sys
+    sys._pytest_current_item = item
+
+
+def pytest_sessionstart(session):
+    """テストセッション開始時の処理"""
+    print(Fore.CYAN + "\n" + "="*70)
+    print(Fore.CYAN + "🚀 Test Session Started")
+    print(Fore.CYAN + "="*70)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """テストセッション終了時に全体の課金情報をAllureレポートに書き込む"""
+    print(Fore.CYAN + "\n" + "="*70)
+    print(Fore.CYAN + "📊 Generating Global Token Usage Report")
+    print(Fore.CYAN + "="*70)
+    
+    # グローバル統計をコンソールに出力
+    global_summary_text = TiktokenCountCallback.format_global_summary()
+    print(Fore.GREEN + global_summary_text)
+    
+    # Allureレポートディレクトリの確認
+    allure_results_dir = session.config.option.allure_report_dir
+    if not allure_results_dir:
+        # デフォルトのallure-resultsディレクトリを使用
+        allure_results_dir = "allure-results"
+    
+    if not os.path.exists(allure_results_dir):
+        os.makedirs(allure_results_dir)
+    
+    # グローバルサマリーデータを取得
+    global_summary = TiktokenCountCallback.get_global_summary()
+    session_history = TiktokenCountCallback.get_global_history()
+    
+    # CSVファイル名を生成（タイムスタンプ付き）
+    csv_filename = f"token-usage-{time.strftime('%Y%m%d%H%M%S')}.csv"
+    csv_file = os.path.join(allure_results_dir, csv_filename)
+    
+    # CSVファイルにセッション詳細を保存
+    import csv
+    with open(csv_file, "w", encoding="utf-8", newline='') as f:
+        writer = csv.writer(f)
+        # ヘッダー行
+        writer.writerow([
+            "Session Label",
+            "Timestamp",
+            "Total Invocations",
+            "Total Tokens",
+            "Input Tokens",
+            "Output Tokens",
+            "Cached Tokens",
+            "Total Cost (USD)"
+        ])
+        
+        # 各セッションの詳細
+        for session in session_history:
+            writer.writerow([
+                session.get('session_label', ''),
+                session.get('timestamp', ''),
+                session.get('total_invocations', 0),
+                session.get('total_tokens', 0),
+                session.get('total_input_tokens', 0),
+                session.get('total_output_tokens', 0),
+                session.get('total_cached_tokens', 0),
+                f"{session.get('total_cost_usd', 0.0):.6f}"
+            ])
+        
+        # サマリー行（空行の後に追加）
+        writer.writerow([])
+        writer.writerow([
+            "TOTAL",
+            "",
+            global_summary.get('total_invocations', 0),
+            global_summary.get('total_tokens', 0),
+            global_summary.get('total_input_tokens', 0),
+            global_summary.get('total_output_tokens', 0),
+            global_summary.get('total_cached_tokens', 0),
+            f"{global_summary.get('total_cost_usd', 0.0):.6f}"
+        ])
+    
+    print(Fore.CYAN + f"✅ Token usage CSV written to {csv_file}")
+    
+    # environment.propertiesの先頭に課金情報を追加
+    env_file = os.path.join(allure_results_dir, "environment.properties")
+    
+    # 既存の内容を読み込む
+    existing_content = ""
+    if os.path.exists(env_file):
+        with open(env_file, "r", encoding="utf-8") as f:
+            existing_content = f.read()
+    
+    # 新しい内容を作成（先頭に課金情報）
+    total_invocations = global_summary.get('total_invocations', 0)
+    avg_cost = global_summary.get('total_cost_usd', 0.0) / total_invocations if total_invocations > 0 else 0.0
+    
+    with open(env_file, "w", encoding="utf-8") as f:
+        # LLM課金情報を先頭に書き込み
+        f.write(f"LLM_totalCostUSD={global_summary.get('total_cost_usd', 0.0):.6f}\n")
+        f.write(f"LLM_totalTokens={global_summary.get('total_tokens', 0)}\n")
+        f.write(f"LLM_totalInvocations={global_summary.get('total_invocations', 0)}\n")
+        f.write(f"LLM_avgCostPerCall={avg_cost:.6f}\n")
+        f.write(f"BillingDashboardFile={csv_filename}\n")
+        f.write("\n")
+        
+        # 既存の内容を追加
+        f.write(existing_content)
+    
+    print(Fore.CYAN + f"✅ Global token usage written to {env_file}")
+
+
 async def evaluate_task_result(
     task_input: str, response: str, executed_steps: list = None, token_callback=None
 ) -> str:
@@ -378,6 +490,20 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                         name="💰 Test Token Usage Summary",
                         attachment_type=allure.attachment_type.TEXT
                     )
+                
+                # グローバル統計に保存（テストケースIDをラベルとして使用）
+                try:
+                    # pytest の現在のテストアイテムからテストIDを取得
+                    import sys
+                    test_id = "Unknown Test"
+                    if hasattr(sys, '_pytest_current_item'):
+                        test_id = sys._pytest_current_item.nodeid
+                    
+                    # グローバル履歴に保存
+                    token_callback.save_session_to_global(test_id)
+                    print(Fore.YELLOW + f"💾 Token stats saved to global history: {test_id}")
+                except Exception as e:
+                    print(Fore.YELLOW + f"⚠️  グローバル統計保存エラー: {e}")
                 
                 # セッション終了前にアプリを終了
                 app_package = capabilities.get("appium:appPackage")

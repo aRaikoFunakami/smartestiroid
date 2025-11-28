@@ -200,6 +200,50 @@ uv run pytest test_android_app.py --testsheet=testsheet_en.csv -k "TEST_0001"
 uv run pytest test_android_app.py --knowhow=custom_knowhow_example.txt
 ```
 
+---
+
+## 📊 Allure レポートと LLM 課金統計の保存
+
+テスト完了後、`allure-results/` に以下のファイルが生成されます。
+
+- `environment.properties`
+   - 先頭にセッション全体の LLM 課金サマリが追記されます（ダッシュボードで見やすくするため）
+   - 記録されるキー例:
+      - `LLM_totalCostUSD`（総コスト）
+      - `LLM_totalTokens`（総トークン数）
+      - `LLM_totalInvocations`（LLM呼び出し総数）
+      - `LLM_avgCostPerCall`（1呼び出し平均コスト）
+      - `BillingDashboardFile`（CSVファイル名）
+
+- `token-usage-YYYYMMDDHHMMSS.csv`
+   - すべての課金統計を CSV として保存します（Allure のダッシュボードに直接表示されない詳細を人間が見やすい形で提供）
+   - フォーマット:
+      - ヘッダー: `Session Label, Timestamp, Total Invocations, Total Tokens, Input Tokens, Output Tokens, Cached Tokens, Total Cost (USD)`
+      - 各テストセッションの行 + 最終行に `TOTAL` サマリ
+
+例（environment.properties 冒頭）:
+
+```
+LLM_totalCostUSD=0.090194
+LLM_totalTokens=239981
+LLM_totalInvocations=24
+LLM_avgCostPerCall=0.003758
+BillingDashboardFile=token-usage-20251128145027.csv
+```
+
+例（CSV の内容）:
+
+```
+Session Label,Timestamp,Total Invocations,Total Tokens,Input Tokens,Output Tokens,Cached Tokens,Total Cost (USD)
+test_android_app.py::test_TEST_0019,2025-11-28T14:47:22.875303,12,118142,114788,3354,64640,0.031889
+test_android_app.py::test_TEST_0020,2025-11-28T14:50:25.922557,38,519760,513005,6755,340864,0.113750
+
+TOTAL,,50,637902,627793,10109,405504,0.145639
+```
+
+この仕組みにより、Allure レポートと併せて課金状況のサマリと詳細を簡単に追跡できます。
+```
+
 コマンドラインで直接指定する場合:
 
 ```bash
