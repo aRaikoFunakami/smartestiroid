@@ -112,6 +112,11 @@ def create_workflow_functions(
                         )]},
                         config={"callbacks": [tool_callback]}
                     )
+                
+                # ツール実行完了後、画面反映を待つ
+                # 3秒は経験則値、必要に応じて調整可能
+                import asyncio
+                await asyncio.sleep(3)
 
                 log_text = f"ステップ '{task}' のエージェント応答: {agent_response['messages'][-1].content}"
                 print(Fore.RED + log_text)
