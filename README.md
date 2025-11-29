@@ -13,8 +13,7 @@ Androidテストやpytestが初めての方でも、手順通りに進めるこ�
 | **Appium** | モバイル自動化 | Androidアプリを操作・検証します。 |
 | **Allure** | レポート生成 | テスト結果をグラフィカルに可視化します。 |
 | **SmartestiRoid** | テストエージェント | LLMを利用してテストを動的に制御します。 |
-| **LLM (GPT-4.1-mini)** | AI層 | テスト内容を理解し、柔軟なテストを計画・生成します。 |
-| **MCP (Message Control Protocol)** | 通信層 | AppiumサーバーとSmartestiRoid間で指令を中継します。 |
+| **LLM (GPT-4.1)** | AI層 | テスト内容を理解し、柔軟なテストを計画・生成します。 |
 
 ---
 
@@ -33,16 +32,13 @@ graph TB
     SmartestiRoid[🤖 SmartestiRoid<br/>テストエージェント]
     
     %% AI・プランニング層
-    LLM[🧠 GPT-4.1-mini<br/>LLM]
+    LLM[🧠 GPT-4.1<br/>LLM]
     
-    %% MCP通信層
-    MCPClient[📡 MCP Client]
-    MCPServer[🔌 jarvis-appium MCP Server]
-    
-    %% Android操作層
-    Appium[📱 Appium]
+    %% Appium操作層
+    AppiumTools[🔧 appium_tools<br/>Appium操作ツール]
+    Appium[📱 Appium Server]
     AndroidDevice[📲 Android Device]
-    ChromeApp[🌐 アプリケーション]
+    App[🌐 アプリケーション]
     
     %% レポート・結果出力
     Allure[📊 Allure Results]
@@ -56,12 +52,11 @@ graph TB
     Pytest --> SmartestiRoid
     CSV --> SmartestiRoid
     SmartestiRoid --> LLM
-    SmartestiRoid --> MCPClient
-    MCPClient <--> MCPServer
-    MCPServer --> Appium
-    Capabilities --> MCPServer
+    SmartestiRoid --> AppiumTools
+    AppiumTools --> Appium
+    Capabilities --> Appium
     Appium <--> AndroidDevice
-    AndroidDevice --> ChromeApp
+    AndroidDevice --> App
     SmartestiRoid --> Allure
     Allure --> Report
 ```
@@ -72,7 +67,7 @@ graph TB
 |----------------|------|
 | **SmartestiRoid** | テスト全体を制御するエージェント。AIを活用して動的にテストを生成します。 |
 | **pytest** | テスト実行ツール。Pythonで記述されたテストを管理・実行します。 |
-| **MCP Server (jarvis-appium)** | Appiumと通信し、Androidデバイス操作を実現します。 |
+| **appium_tools** | Appiumを操作するPythonツール群。LLMから呼び出されます。 |
 | **Appium / Android Device** | 実際のモバイルアプリを操作します。 |
 | **Allure** | テスト結果をHTMLレポートとして出力します。 |
 
@@ -114,18 +109,10 @@ scoop install allure
 git clone https://github.com/aRaikoFunakami/smartestiroid.git
 cd smartestiroid
 
-# 外部依存ライブラリ（appium-tools）をクローン
-cd external
-git clone https://github.com/aRaikoFunakami/appium-tools.git
-cd ..
-
 # Python仮想環境と依存ライブラリを同期
 uv python install
 uv sync
 ```
-
-> **Note**: `external/` ディレクトリ内のリポジトリは smartestiroid の git 管理から除外されています。  
-> appium-tools の更新は `external/appium-tools/` 内で個別に `git pull` してください。
 
 ---
 
@@ -153,18 +140,22 @@ uv sync
 
 ---
 
-### 3. Androidテストサーバーの起動
+### 3. Appiumサーバーの起動
 
-SmartestiRoidと連携する改良版 `jarvis-appium` MCPサーバーを起動します。  
-セットアップ詳細はこちらを参照してください：  
-🔗 [mcp-appium (SmartestiRoid対応版)](https://github.com/aRaikoFunakami/mcp-appium/blob/testroid/install.md)
+Appiumサーバーを起動します：
+
+```bash
+appium
+```
+
+> Appiumがインストールされていない場合は、`npm install -g appium` でインストールしてください。
 
 ---
 
 ### 4. pytest でテスト実行
 
 ```bash
-uv run pytest test_android_app.py
+uv run pytest src/test_android_app.py
 ```
 
 > 実行後、テスト結果は `allure-results/` ディレクトリに出力されます。
@@ -174,7 +165,7 @@ uv run pytest test_android_app.py
 デフォルトでは`testsheet.csv`が使用されますが、`--testsheet`オプションで別のCSVファイルを指定できます。
 
 ```bash
-uv run pytest test_android_app.py --testsheet=testsheet_en.csv
+uv run pytest src/test_android_app.py --testsheet=testsheet_en.csv
 ```
 
 #### 🔹 特定のテストのみ実行する場合
@@ -182,19 +173,19 @@ uv run pytest test_android_app.py --testsheet=testsheet_en.csv
 1つだけ実行する場合:
 
 ```bash
-uv run pytest test_android_app.py -k "TEST_0003"
+uv run pytest src/test_android_app.py -k "TEST_0003"
 ```
 
 複数のテストを実行する場合:
 
 ```bash
-uv run pytest test_android_app.py -k "TEST_0003 or TEST_0004 or TEST_0005"
+uv run pytest src/test_android_app.py -k "TEST_0003 or TEST_0004 or TEST_0005"
 ```
 
 カスタムCSVと組み合わせる場合:
 
 ```bash
-uv run pytest test_android_app.py --testsheet=testsheet_en.csv -k "TEST_0001"
+uv run pytest src/test_android_app.py --testsheet=testsheet_en.csv -k "TEST_0001"
 ```
 
 > `-k` オプションはpytestのフィルタ機能です。  
@@ -207,7 +198,7 @@ uv run pytest test_android_app.py --testsheet=testsheet_en.csv -k "TEST_0001"
 ファイルから読み込む場合:
 
 ```bash
-uv run pytest test_android_app.py --knowhow=custom_knowhow_example.txt
+uv run pytest src/test_android_app.py --knowhow=custom_knowhow_example.txt
 ```
 
 ---
@@ -257,18 +248,18 @@ TOTAL,,50,637902,627793,10109,405504,0.145639
 コマンドラインで直接指定する場合:
 
 ```bash
-uv run pytest test_android_app.py --knowhow-text="【カスタムルール】スクロール操作は慎重に行うこと"
+uv run pytest src/test_android_app.py --knowhow-text="【カスタムルール】スクロール操作は慎重に行うこと"
 ```
 
 複数テストと組み合わせる場合:
 
 ```bash
-uv run pytest test_android_app.py --knowhow=custom_knowhow_example.txt -k "TEST_0003 or TEST_0004"
+uv run pytest src/test_android_app.py --knowhow=custom_knowhow_example.txt -k "TEST_0003 or TEST_0004"
 ```
 
 > **knowhowとは？**  
 > LLMエージェントがツールを使用する際のルールや制約条件を記述したテキストです。  
-> デフォルトでは`conftest.py`の`KNOWHOW_INFO`が使用されます。  
+> デフォルトでは`src/config.py`の`KNOWHOW_INFO`が使用されます。  
 > カスタムknowhowを指定することで、テストケースごとの特殊なルールを適用できます。
 
 **カスタムknowhowの例:**
@@ -334,9 +325,34 @@ adb -s emulator-5554 shell pm list packages | grep chrome
 
 ## 📘 備考
 
-- テストケースは `test_android_app.py` 内で **動的に生成** されます。  
+- テストケースは `src/test_android_app.py` 内で **動的に生成** されます。  
 - 詳細なAllureレポートの使い方は [Allure公式ドキュメント](https://docs.qameta.io/allure/) を参照してください。
-- 問題がある場合は [issuesページ](https://github.com/aRaikoFunakami/test_robot/issues) に報告してください。
+- 問題がある場合は [issuesページ](https://github.com/aRaikoFunakami/smartestiroid/issues) に報告してください。
+
+---
+
+## 📁 プロジェクト構成
+
+```
+smartestiroid/
+├── src/                          # ソースコード
+│   ├── conftest.py               # pytest設定・フィクスチャ
+│   ├── test_android_app.py       # メインテストファイル
+│   ├── config.py                 # 設定（モデル、knowhow等）
+│   ├── models.py                 # データモデル定義
+│   ├── workflow.py               # ワークフロー定義
+│   ├── appium_tools/             # Appium操作ツール群
+│   ├── agents/                   # プランナー/リプランナー
+│   └── utils/                    # ユーティリティ
+├── tests/                        # 単体テスト
+│   ├── test_tools.py             # Appiumツールテスト
+│   └── test_global_stats.py      # トークンカウンターテスト
+├── testsheet.csv                 # テストケース定義
+├── capabilities.json             # Appium設定
+├── custom_knowhow_example.txt    # カスタムknowhowサンプル
+├── pytest.ini                    # pytest設定
+└── pyproject.toml                # プロジェクト設定
+```
 
 ---
 
