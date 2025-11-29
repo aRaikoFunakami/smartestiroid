@@ -1,17 +1,17 @@
-ID,Reset,Epic,Feature,Story,Title,Description,Step,ExpectedResults,Criteria
-TEST_0001,Reset,Chrome Basic Operations,Opening a New Tab,Open a new tab,"Open ""New Tab""","Verify that Chrome is running and confirm the operation to open a new tab by selecting “New Tab” from the menu icon.","1. Launch Chrome.
-2. Click the menu icon (three dots) at the top right.
-3. Select “New Tab”.","Criteria: A new tab is added to the tab bar at the top, and two tabs are displayed in total.",EXPECTED_STATS_RESULT
-TEST_0002,Reset,Chrome Basic Operations,Accessing a Website,Access a specified site by entering a URL,Access yahoo.co.jp,"Launch Chrome, enter ""yahoo.co.jp"" into the URL bar, and verify that the website is displayed correctly.","1. Launch Chrome.
-2. Enter yahoo.co.jp in the URL bar and press Enter.","The URL bar at the top shows ""yahoo.co.jp"" and the Yahoo homepage is displayed normally.",EXPECTED_STATS_RESULT
-TEST_0003,Reset,Chrome Basic Operations,Closing the Application,Properly close the browser,Close Chrome,"Verify that Chrome can be properly closed while it is running.","1. Close Chrome.","The Chrome application is closed.",EXPECTED_STATS_RESULT
-TEST_0004,Reset,Chrome Basic Operations,Creating a Bookmark,Bookmark a specified website,Bookmark yahoo.co.jp,"After accessing yahoo.co.jp, verify the operation of adding a bookmark by clicking the star icon in the URL bar.","1. Confirm Chrome is running.
-2. Enter yahoo.co.jp in the URL bar.
-3. Click the star icon to add a bookmark.","The star icon in the URL bar changes to a filled star icon.",EXPECTED_STATS_RESULT
-TEST_0005,noReset,Chrome Basic Operations,Viewing Bookmarks,Open an existing bookmark,Open Mobile Bookmarks,"Verify the operation of opening the saved “Mobile Bookmarks” folder by selecting “Bookmarks” from the menu.","1. Click the menu icon (three dots) at the top right.
-2. From the displayed menu, select “Bookmarks”.
-3. Select “Mobile Bookmarks”.","The Mobile Bookmarks screen displays ""Yahoo! JAPAN"".",EXPECTED_STATS_RESULT
-TEST_0006,noReset,Chrome Basic Operations,Editing Bookmarks,Change the name of an existing bookmark,"Rename the ""Yahoo! JAPAN"" bookmark to “Changed Yahoo”","Verify the operation of editing the existing ""Yahoo! JAPAN"" bookmark and changing its name to “Changed Yahoo”.","1. Click the bookmark options menu (three dots) next to [Yahoo! JAPAN].
-2. Select “Edit”.
-3. Change the name to “Changed Yahoo”.
-4. Save.","""Changed Yahoo"" is displayed in the Mobile Bookmarks screen.",EXPECTED_STATS_RESULT
+ID,Reset,dontStopAppOnReset,Epic,Feature,Story,Title,Description,Step,ExpectedResults
+TEST_0001,Reset,Stop,Chrome Basic Operations,New Tab Operations,Open a new tab,"Open ""New Tab""","Verify that Chrome is running, and confirm the operation to open a new tab by selecting ""New Tab"" from the menu icon.","1. Launch Chrome
+2. Click the menu icon (three dots) at the top right of the screen
+3. Select ""New Tab"" from the displayed menu",Criteria: A new tab is added to the tab bar at the top of the screen and two tabs are displayed in total
+TEST_0002,noReset,Stop,Chrome Basic Operations,Accessing a Website,Access a specified site by entering a URL,Access yahoo.co.jp,"Launch Chrome, enter ""yahoo.co.jp"" into the URL bar, and verify that the website is displayed correctly.","1. Launch Chrome
+2. Enter yahoo.co.jp in the URL bar and press Enter","The URL bar at the top displays ""yahoo.co.jp"" and the Yahoo homepage is displayed"
+TEST_0003,noReset,Stop,Chrome Basic Operations,Closing the Application,Properly close the browser,Close Chrome,Verify that the running Chrome can be properly closed.,1. Close Chrome,The Chrome application is closed
+TEST_0004,Reset,Stop,Chrome Basic Operations,Creating a Bookmark,Bookmark a specified website,Bookmark yahoo.co.jp,"After accessing yahoo.co.jp, verify the operation of adding a bookmark by clicking the star icon in the URL bar.","1. Confirm Chrome is running
+2. Enter yahoo.co.jp in the URL bar and press Enter
+3. After navigating to yahoo.co.jp, click the star icon in the URL bar",The star icon in the URL bar changes to a filled star icon
+TEST_0005,noReset,dontStop,Chrome Basic Operations,Viewing Bookmarks,Open an existing bookmark,Open Mobile Bookmarks,"Verify the operation of opening the saved ""Mobile Bookmarks"" folder by selecting ""Bookmark"" from the menu.","1. Click the menu icon (three dots) at the top right of the screen
+2. Select ""Bookmark"" from the displayed menu
+3. Select [Mobile Bookmarks]",Yahoo! JAPAN is displayed on the Mobile Bookmarks screen
+TEST_0006,noReset,dontStop,Chrome Basic Operations,Editing Bookmarks,Change the name of an existing bookmark,"Rename the ""Yahoo! JAPAN"" bookmark to ""Changed Yahoo""","Verify the operation of editing the existing ""Yahoo! JAPAN"" bookmark and changing its name to ""Changed Yahoo"".","1. Click the bookmark options menu icon (three dots) to the right of [Yahoo! JAPAN]
+2. Select [Edit] from the menu
+3. Enter ""Changed Yahoo"" in the [Name] field of the [Edit bookmark] dialog and confirm
+4. Click the back icon (left arrow) at the top left of the [Edit bookmark] dialog",Changed Yahoo is displayed on the Mobile Bookmarks screen
