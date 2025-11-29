@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage, SystemMessage
+from appium.options.android import UiAutomator2Options
 import base64
 from PIL import Image
 import io
@@ -15,28 +16,32 @@ import os
 import asyncio
 import time
 
-from appium_tools import appium_driver, appium_tools
-from appium_tools.token_counter import TiktokenCountCallback
+from .appium_tools import appium_driver, appium_tools
+from .appium_tools.token_counter import TiktokenCountCallback
 
 # Import from newly created modules
-from models import (
+from .models import (
     PlanExecute, Plan, Response, Act, DecisionResult, EvaluationResult
 )
-from config import (
+from .config import (
     OPENAI_TIMEOUT, OPENAI_MAX_RETRIES,
     MODEL_STANDARD, MODEL_MINI, MODEL_EVALUATION, MODEL_EVALUATION_MINI,
-    planner_model, execution_model, evaluation_model,
     RESULT_PASS, RESULT_SKIP, RESULT_FAIL,
     KNOWHOW_INFO
 )
-from workflow import create_workflow_functions
-from utils.allure_logger import log_openai_error_to_allure
-from utils.device_info import write_device_info_once
-from agents import SimplePlanner
+# モデル変数（planner_model等）は pytest_configure で動的に変更されるため、
+# 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
+from . import config as cfg
+from .workflow import create_workflow_functions
+from .utils.allure_logger import log_openai_error_to_allure
+from .utils.device_info import write_device_info_once
+from .agents import SimplePlanner
 
 
+# パッケージのルートディレクトリ
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
+# デフォルトのcapabilitiesパス（pytest_configureで更新される）
 capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
 
 init(autoreset=True)
@@ -63,6 +68,18 @@ def pytest_addoption(parser):
         default="testsheet.csv",
         help="テストケース定義CSVファイルのパス（デフォルト: testsheet.csv）"
     )
+    parser.addoption(
+        "--capabilities",
+        action="store",
+        default="capabilities.json",
+        help="Appium capabilities JSONファイルのパス（デフォルト: capabilities.json）"
+    )
+    parser.addoption(
+        "--mini-model",
+        action="store_true",
+        default=False,
+        help="高速・低コストのMiniモデルを使用する"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -83,6 +100,9 @@ def custom_knowhow(request):
     # ファイルパスが指定された場合
     knowhow_path = request.config.getoption("--knowhow")
     if knowhow_path:
+        # 相対パスの場合はカレントディレクトリ基準で解決
+        if not os.path.isabs(knowhow_path):
+            knowhow_path = os.path.join(os.getcwd(), knowhow_path)
         try:
             with open(knowhow_path, "r", encoding="utf-8") as f:
                 knowhow_content = f.read()
@@ -110,9 +130,27 @@ def testsheet_path(request):
 
 def pytest_configure(config):
     """pytest設定時にグローバル変数を設定"""
-    # テストシートパスをグローバル変数として保存
+    global capabilities_path
     import sys
+    
+    # --mini-model オプションが指定された場合、環境変数を設定
+    if config.getoption("--mini-model"):
+        os.environ["USE_MINI_MODEL"] = "1"
+        # configモジュールのモデル設定を更新（トップレベルでインポート済みのcfgを使用）
+        cfg.use_mini_model = True
+        cfg.planner_model = cfg.MODEL_MINI
+        cfg.execution_model = cfg.MODEL_MINI
+        cfg.evaluation_model = cfg.MODEL_EVALUATION_MINI
+        print(Fore.CYAN + "🚀 Miniモデルモードで実行します")
+    
+    # テストシートパスをグローバル変数として保存
     sys._pytest_testsheet_path = config.getoption("--testsheet")
+    
+    # capabilities パスを設定（相対パスの場合はカレントディレクトリ基準で解決）
+    cap_path = config.getoption("--capabilities")
+    if not os.path.isabs(cap_path):
+        cap_path = os.path.join(os.getcwd(), cap_path)
+    capabilities_path = cap_path
 
 
 def pytest_runtest_setup(item):
@@ -239,8 +277,8 @@ async def evaluate_task_result(
         state_analysis: リプランナーによる状態分析結果
         token_callback: トークンカウンターコールバック
     """
-    # 使用モデルの決定
-    model = evaluation_model
+    # 使用モデルの決定（動的に取得）
+    model = cfg.evaluation_model
 
     # モデルは現状固定（簡素化）
     callbacks = [token_callback] if token_callback else []
@@ -346,7 +384,6 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
         knowhow: ノウハウ情報。デフォルトはKNOWHOW_INFO、カスタムknowhowを渡すことも可能。
     """
     
-    from appium.options.android import UiAutomator2Options
     options = UiAutomator2Options()
     capabilities = {}
 
@@ -416,15 +453,15 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                 print("アプリ起動待機中... (3秒)")
                 await asyncio.sleep(3)
 
-            # 環境変数でモデル選択
-            print(Fore.CYAN + f"使用モデル: {execution_model}")
+            # 環境変数でモデル選択（動的に取得）
+            print(Fore.CYAN + f"使用モデル: {cfg.execution_model}")
 
             # トークンカウンターコールバックを作成
-            token_callback = TiktokenCountCallback(model=execution_model)
+            token_callback = TiktokenCountCallback(model=cfg.execution_model)
 
             # エージェントエグゼキューターを作成（カスタムknowhowを使用）
             llm = ChatOpenAI(
-                model=execution_model,
+                model=cfg.execution_model,
                 temperature=0,
                 timeout=OPENAI_TIMEOUT,
                 max_retries=OPENAI_MAX_RETRIES,
@@ -433,11 +470,11 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。\n{knowhow}\n"""
 
             agent_executor = create_agent(llm, appium_tools(), system_prompt=prompt)
-            print(Fore.CYAN + f"Agent Executor用モデル: {execution_model}")
+            print(Fore.CYAN + f"Agent Executor用モデル: {cfg.execution_model}")
 
             planner = SimplePlanner(
                 knowhow, 
-                model_name=planner_model,
+                model_name=cfg.planner_model,
                 token_callback=token_callback
             )
 

@@ -11,13 +11,13 @@
 """
 
 import pytest
-from appium_tools import (
+from smartestiroid.appium_tools import (
     get_driver_status,
     get_current_app,
     take_screenshot,
     get_page_source,
 )
-from appium_tools.navigation import wait_short_loading
+from smartestiroid.appium_tools.navigation import wait_short_loading
 
 
 @pytest.mark.asyncio

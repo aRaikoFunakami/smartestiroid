@@ -9,8 +9,8 @@ from colorama import Fore
 from langchain_core.messages import HumanMessage
 import allure
 
-from models import Plan, Response, DecisionResult
-from config import RESULT_PASS, RESULT_FAIL
+from ..models import Plan, Response, DecisionResult
+from ..config import RESULT_PASS, RESULT_FAIL
 
 
 class MultiStageReplanner:

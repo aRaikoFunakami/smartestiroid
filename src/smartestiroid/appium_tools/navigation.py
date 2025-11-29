@@ -1,6 +1,7 @@
 """Navigation and screen inspection tools for Appium."""
 
 import logging
+import time
 from langchain.tools import tool
 from selenium.common.exceptions import InvalidSessionIdException
 
@@ -55,7 +56,6 @@ def wait_short_loading(seconds: str = "5") -> str:
             wait_secs = 5
 
         logger.info(f"🔧 Waiting {wait_secs}s to allow UI to settle...")
-        import time
         time.sleep(wait_secs)
         return f"Waited {wait_secs} seconds for loading"
     except InvalidSessionIdException:

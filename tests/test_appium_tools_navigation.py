@@ -10,7 +10,7 @@
 
 import asyncio
 import pytest
-from appium_tools import (
+from smartestiroid.appium_tools import (
     scroll_element,
     scroll_to_element,
     click_element,

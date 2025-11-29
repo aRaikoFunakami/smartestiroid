@@ -8,16 +8,19 @@
 
 ```
 smartestiroid/
-├── src/                          # ソースコード
-│   ├── conftest.py               # pytest設定・フィクスチャ
-│   ├── test_android_app.py       # メインテストファイル
-│   ├── config.py                 # 設定（モデル、knowhow等）
-│   ├── models.py                 # データモデル定義
-│   ├── workflow.py               # ワークフロー定義
-│   ├── appium_tools/             # Appium操作ツール群
-│   ├── agents/                   # プランナー/リプランナー
-│   └── utils/                    # ユーティリティ
+├── src/
+│   └── smartestiroid/            # メインパッケージ
+│       ├── __init__.py           # パッケージエクスポート
+│       ├── conftest.py           # pytest設定・フィクスチャ
+│       ├── test_android_app.py   # メインテストファイル
+│       ├── config.py             # 設定（モデル、knowhow等）
+│       ├── models.py             # データモデル定義
+│       ├── workflow.py           # ワークフロー定義
+│       ├── appium_tools/         # Appium操作ツール群
+│       ├── agents/               # プランナー/リプランナー
+│       └── utils/                # ユーティリティ
 ├── tests/                        # 単体テスト
+│   ├── conftest.py               # テスト用フィクスチャ
 │   ├── test_appium_tools_session.py      # セッション・基本操作テスト
 │   ├── test_appium_tools_element.py      # 要素操作テスト
 │   ├── test_appium_tools_navigation.py   # ナビゲーションテスト
@@ -79,7 +82,7 @@ uv run python -m module_name
 ### テストファイルの配置
 
 - **単体テスト**: `tests/` ディレクトリに配置
-- **統合テスト（メインテスト）**: `src/test_android_app.py`
+- **統合テスト（メインテスト）**: `src/smartestiroid/test_android_app.py`
 
 ### テストファイル命名規則
 
@@ -128,14 +131,17 @@ uv run pytest tests/test_appium_tools_session.py -k "test_take_screenshot"
 uv run pytest tests/ -v
 
 # メインテスト（Android接続必要）
-uv run pytest src/test_android_app.py -k "TEST_0001"
+uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0001"
+
+# 高速モードで実行
+uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0001" --mini-model
 ```
 
 ---
 
 ## ⚠️ appium_tools 更新時の必須事項
 
-`src/appium_tools/` を更新した場合は、**必ず以下を実行**してください：
+`src/smartestiroid/appium_tools/` を更新した場合は、**必ず以下を実行**してください：
 
 ### 1. 関連テストの追加・更新
 
@@ -175,10 +181,10 @@ uv run pytest tests/ -v
 
 ```bash
 # インポートテスト
-uv run python -c "from appium_tools import appium_driver; print('OK')"
+uv run python -c "from smartestiroid.appium_tools import appium_driver; print('OK')"
 
 # 実機テスト（Android接続時）
-uv run pytest src/test_android_app.py -k "TEST_0001"
+uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0001"
 ```
 
 ---
@@ -196,9 +202,13 @@ import os
 import pytest
 from langchain_openai import ChatOpenAI
 
-# 3. ローカルモジュール
-from appium_tools import appium_driver
-from config import MODEL_STANDARD
+# 3. ローカルモジュール（パッケージ内では相対インポート）
+from .appium_tools import appium_driver
+from .config import MODEL_STANDARD
+
+# または外部からの利用時は絶対インポート
+from smartestiroid.appium_tools import appium_driver
+from smartestiroid.config import MODEL_STANDARD
 ```
 
 ### 型ヒント
@@ -225,14 +235,30 @@ uv sync
 uv run pytest tests/ -v
 
 # メインテスト実行（Android接続必要）
-uv run pytest src/test_android_app.py
+uv run pytest src/smartestiroid/test_android_app.py
 
 # Allureレポート表示
 allure serve allure-results
 
 # インポート確認
-uv run python -c "from appium_tools import appium_driver; print('OK')"
+uv run python -c "from smartestiroid.appium_tools import appium_driver; print('OK')"
 ```
+
+---
+
+## 📦 外部プロジェクトからの利用
+
+smartestiroid は editable インストールで外部プロジェクトから利用できます。
+
+```bash
+# 外部プロジェクトで依存関係として追加
+uv add smartestiroid --path /path/to/smartestiroid --editable
+```
+
+**注意点**:
+- editable モードでは、smartestiroid のソース変更が即座に反映されます
+- `uv sync --reinstall-package smartestiroid` は不要です
+- 相対パス（`./testsheet.csv` など）は実行時のカレントディレクトリ基準で解決されます
 
 ---
 
@@ -244,3 +270,4 @@ uv run python -c "from appium_tools import appium_driver; print('OK')"
 - [ ] `uv run pytest tests/` でテストがパスする
 - [ ] appium_tools を変更した場合、関連テストを追加・実行した
 - [ ] 新しい依存ライブラリは `uv add` で追加した
+- [ ] パッケージ内のインポートは相対インポート（`from .config import ...`）を使用している

@@ -2,7 +2,7 @@
 
 import pytest_asyncio
 from appium.options.android import UiAutomator2Options
-from appium_tools import appium_driver
+from smartestiroid.appium_tools import appium_driver
 
 
 @pytest_asyncio.fixture

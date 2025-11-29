@@ -9,7 +9,7 @@
 
 import asyncio
 import pytest
-from appium_tools import (
+from smartestiroid.appium_tools import (
     activate_app,
     terminate_app,
     list_apps,

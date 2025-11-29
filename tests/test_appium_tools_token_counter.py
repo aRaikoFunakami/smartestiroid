@@ -4,7 +4,7 @@ Test program for TiktokenCountCallback global statistics feature
 """
 
 import pytest
-from appium_tools.token_counter import TiktokenCountCallback
+from smartestiroid.appium_tools.token_counter import TiktokenCountCallback
 
 
 def simulate_llm_call(counter: TiktokenCountCallback, 

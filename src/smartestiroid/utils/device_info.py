@@ -25,6 +25,9 @@ async def write_device_info_once(driver=None, capabilities_path: str = "capabili
 
     try:
         # capabilities.json から基本情報を取得
+        # 相対パスの場合はカレントディレクトリ基準で解決
+        if not os.path.isabs(capabilities_path):
+            capabilities_path = os.path.join(os.getcwd(), capabilities_path)
         with open(capabilities_path, "r") as f:
             info = json.load(f)  
     except Exception as e:

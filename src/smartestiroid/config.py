@@ -17,13 +17,22 @@ OPENAI_MAX_RETRIES = 1  # リトライ1回
 
 
 # --- LLM Model Configuration ---
-# 環境変数 USE_MINI_MODEL=1 を設定すると自動的にminiモデルに切り替わります
+# 環境変数 USE_MINI_MODEL=1 または pytest --mini-model で自動的にminiモデルに切り替わります
+#
+# ⚠️ 重要: モデル変数の使用方法
+# planner_model, execution_model, evaluation_model は pytest_configure で動的に変更されます。
+# そのため、他のモジュールからは以下のように使用してください：
+#
+#   NG: from .config import planner_model  # インポート時の値が固定される
+#   OK: from . import config as cfg; cfg.planner_model  # 常に最新値を参照
+#
 MODEL_STANDARD = "gpt-4.1"              # 標準モデル（高精度）
 MODEL_MINI = "gpt-4.1-mini"             # Miniモデル（高速・低コスト）
 MODEL_EVALUATION = "gpt-5"              # 評価用モデル（標準時）
 MODEL_EVALUATION_MINI = "gpt-5-mini"    # 評価用モデル（Mini時）
 
 # Environment-based model selection
+# 注意: これらの変数は conftest.py の pytest_configure で --mini-model オプションに応じて更新されます
 use_mini_model = os.environ.get("USE_MINI_MODEL", "0") == "1"
 if use_mini_model:
     planner_model = MODEL_MINI

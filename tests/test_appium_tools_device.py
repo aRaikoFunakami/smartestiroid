@@ -10,7 +10,7 @@
 
 import asyncio
 import pytest
-from appium_tools import (
+from smartestiroid.appium_tools import (
     get_device_info,
     is_locked,
     get_orientation,

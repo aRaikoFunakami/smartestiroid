@@ -100,6 +100,104 @@ scoop install allure
 
 ---
 
+## 📦 外部プロジェクトからの利用
+
+smartestiroid は Python パッケージとして外部プロジェクト（GUIアプリなど）から利用できます。
+
+### 1. インストール
+
+```bash
+# 外部プロジェクトで smartestiroid を依存関係として追加
+uv add smartestiroid --path /path/to/smartestiroid
+
+# または editable モードで追加（開発中の変更が即座に反映）
+uv add smartestiroid --path /path/to/smartestiroid --editable
+```
+
+`pyproject.toml` に以下が追加されます：
+
+```toml
+[tool.uv.sources]
+smartestiroid = { path = "../smartestiroid", editable = true }
+```
+
+### 2. 外部プロジェクトの構成
+
+```
+my-gui-project/
+├── pyproject.toml          # smartestiroid を依存関係に含む
+├── capabilities.json       # 自分のデバイス設定
+├── testsheet.csv           # 自分のテストケース
+├── custom_knowhow.txt      # 自分のノウハウ（オプション）
+├── allure-results/         # テスト結果出力先
+└── main.py                 # GUIアプリ
+```
+
+### 3. Python からの実行
+
+```python
+import subprocess
+import os
+import smartestiroid
+
+# smartestiroid のテストファイルパスを取得
+test_file = smartestiroid.TEST_FILE
+
+# pytest コマンドを構築
+cmd = [
+    "uv", "run", "pytest",
+    test_file,
+    "-k", "TEST_0001",
+    "-v",
+    "--tb=short",
+    "--alluredir", "./allure-results",
+    "--testsheet", "./testsheet.csv",
+    "--capabilities", "./capabilities.json",
+    "--knowhow", "./custom_knowhow.txt",
+    "--mini-model",  # 高速・低コストモードを使用する場合
+]
+
+# 環境変数を設定して実行（オプション）
+env = os.environ.copy()
+# env["USE_MINI_MODEL"] = "1"  # --mini-model オプションの代わりに環境変数でも可
+
+subprocess.run(cmd, env=env)
+```
+
+### 4. 利用可能なコマンドラインオプション
+
+| オプション | 説明 | デフォルト |
+|------------|------|-----------|
+| `--testsheet` | テストケースCSVファイルのパス | `testsheet.csv` |
+| `--capabilities` | Appium capabilities JSONファイルのパス | `capabilities.json` |
+| `--knowhow` | カスタムノウハウファイルのパス | なし（デフォルト使用） |
+| `--knowhow-text` | ノウハウを直接テキストで指定 | なし |
+| `--mini-model` | 高速・低コストのMiniモデルを使用 | オフ |
+| `--alluredir` | Allure結果の出力先 | `allure-results` |
+| `-k` | 実行するテストケースのフィルタ | 全件 |
+
+### 5. smartestiroid パッケージのエクスポート
+
+```python
+import smartestiroid
+
+# テストファイルのパス
+smartestiroid.TEST_FILE  # → /path/to/smartestiroid/src/smartestiroid/test_android_app.py
+
+# conftest のパス
+smartestiroid.CONFTEST_FILE
+
+# パッケージディレクトリ
+smartestiroid.PACKAGE_DIR
+
+# プロジェクトルート
+smartestiroid.PROJECT_ROOT
+```
+
+> **注意**: 相対パス（`./testsheet.csv` など）は、**実行時のカレントディレクトリ**を基準に解決されます。
+
+---
+
 ## ⚙️ セットアップ手順
 
 ### 1. 依存パッケージのインストール
@@ -155,7 +253,7 @@ appium
 ### 4. pytest でテスト実行
 
 ```bash
-uv run pytest src/test_android_app.py
+uv run pytest src/smartestiroid/test_android_app.py
 ```
 
 > 実行後、テスト結果は `allure-results/` ディレクトリに出力されます。
@@ -165,7 +263,7 @@ uv run pytest src/test_android_app.py
 デフォルトでは`testsheet.csv`が使用されますが、`--testsheet`オプションで別のCSVファイルを指定できます。
 
 ```bash
-uv run pytest src/test_android_app.py --testsheet=testsheet_en.csv
+uv run pytest src/smartestiroid/test_android_app.py --testsheet=testsheet_en.csv
 ```
 
 #### 🔹 特定のテストのみ実行する場合
@@ -173,19 +271,19 @@ uv run pytest src/test_android_app.py --testsheet=testsheet_en.csv
 1つだけ実行する場合:
 
 ```bash
-uv run pytest src/test_android_app.py -k "TEST_0003"
+uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0003"
 ```
 
 複数のテストを実行する場合:
 
 ```bash
-uv run pytest src/test_android_app.py -k "TEST_0003 or TEST_0004 or TEST_0005"
+uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0003 or TEST_0004 or TEST_0005"
 ```
 
 カスタムCSVと組み合わせる場合:
 
 ```bash
-uv run pytest src/test_android_app.py --testsheet=testsheet_en.csv -k "TEST_0001"
+uv run pytest src/smartestiroid/test_android_app.py --testsheet=testsheet_en.csv -k "TEST_0001"
 ```
 
 > `-k` オプションはpytestのフィルタ機能です。  
@@ -198,7 +296,29 @@ uv run pytest src/test_android_app.py --testsheet=testsheet_en.csv -k "TEST_0001
 ファイルから読み込む場合:
 
 ```bash
-uv run pytest src/test_android_app.py --knowhow=custom_knowhow_example.txt
+uv run pytest src/smartestiroid/test_android_app.py --knowhow=custom_knowhow_example.txt
+```
+
+#### 🔹 カスタム capabilities.json を指定する場合
+
+異なるデバイス設定を使用する場合、`--capabilities` オプションでファイルパスを指定できます。
+
+```bash
+uv run pytest src/smartestiroid/test_android_app.py --capabilities=capabilities_chrome.json
+```
+
+#### 🔹 高速・低コストモードで実行する場合
+
+`--mini-model` オプションで GPT-4.1-mini を使用した高速・低コストモードで実行できます。
+
+```bash
+uv run pytest src/smartestiroid/test_android_app.py --mini-model -k "TEST_0001"
+```
+
+または環境変数でも指定可能:
+
+```bash
+USE_MINI_MODEL=1 uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0001"
 ```
 
 ---
@@ -248,13 +368,13 @@ TOTAL,,50,637902,627793,10109,405504,0.145639
 コマンドラインで直接指定する場合:
 
 ```bash
-uv run pytest src/test_android_app.py --knowhow-text="【カスタムルール】スクロール操作は慎重に行うこと"
+uv run pytest src/smartestiroid/test_android_app.py --knowhow-text="【カスタムルール】スクロール操作は慎重に行うこと"
 ```
 
 複数テストと組み合わせる場合:
 
 ```bash
-uv run pytest src/test_android_app.py --knowhow=custom_knowhow_example.txt -k "TEST_0003 or TEST_0004"
+uv run pytest src/smartestiroid/test_android_app.py --knowhow=custom_knowhow_example.txt -k "TEST_0003 or TEST_0004"
 ```
 
 > **knowhowとは？**  
@@ -325,7 +445,7 @@ adb -s emulator-5554 shell pm list packages | grep chrome
 
 ## 📘 備考
 
-- テストケースは `src/test_android_app.py` 内で **動的に生成** されます。  
+- テストケースは `src/smartestiroid/test_android_app.py` 内で **動的に生成** されます。  
 - 詳細なAllureレポートの使い方は [Allure公式ドキュメント](https://docs.qameta.io/allure/) を参照してください。
 - 問題がある場合は [issuesページ](https://github.com/aRaikoFunakami/smartestiroid/issues) に報告してください。
 
@@ -335,19 +455,27 @@ adb -s emulator-5554 shell pm list packages | grep chrome
 
 ```
 smartestiroid/
-├── src/                          # ソースコード
-│   ├── conftest.py               # pytest設定・フィクスチャ
-│   ├── test_android_app.py       # メインテストファイル
-│   ├── config.py                 # 設定（モデル、knowhow等）
-│   ├── models.py                 # データモデル定義
-│   ├── workflow.py               # ワークフロー定義
-│   ├── appium_tools/             # Appium操作ツール群
-│   ├── agents/                   # プランナー/リプランナー
-│   └── utils/                    # ユーティリティ
+├── src/
+│   └── smartestiroid/            # メインパッケージ
+│       ├── __init__.py           # パッケージエクスポート
+│       ├── conftest.py           # pytest設定・フィクスチャ
+│       ├── test_android_app.py   # メインテストファイル
+│       ├── config.py             # 設定（モデル、knowhow等）
+│       ├── models.py             # データモデル定義
+│       ├── workflow.py           # ワークフロー定義
+│       ├── appium_tools/         # Appium操作ツール群
+│       ├── agents/               # プランナー/リプランナー
+│       └── utils/                # ユーティリティ
 ├── tests/                        # 単体テスト
-│   ├── test_tools.py             # Appiumツールテスト
-│   └── test_global_stats.py      # トークンカウンターテスト
-├── testsheet.csv                 # テストケース定義
+│   ├── conftest.py               # テスト用フィクスチャ
+│   ├── test_appium_tools_session.py     # セッション・基本操作テスト
+│   ├── test_appium_tools_element.py     # 要素操作テスト
+│   ├── test_appium_tools_navigation.py  # ナビゲーションテスト
+│   ├── test_appium_tools_app.py         # アプリ管理テスト
+│   ├── test_appium_tools_device.py      # デバイス状態テスト
+│   └── test_appium_tools_token_counter.py # トークンカウンターテスト
+├── testsheet.csv                 # テストケース定義（日本語）
+├── testsheet_en.csv              # テストケース定義（英語）
 ├── capabilities.json             # Appium設定
 ├── custom_knowhow_example.txt    # カスタムknowhowサンプル
 ├── pytest.ini                    # pytest設定

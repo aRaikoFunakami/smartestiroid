@@ -9,9 +9,12 @@ from colorama import Fore
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END
 
-from models import PlanExecute, Response
-from config import KNOWHOW_INFO, planner_model, execution_model
-from utils import AllureToolCallbackHandler, generate_screen_info
+from .models import PlanExecute, Response
+from .config import KNOWHOW_INFO, RESULT_PASS
+# モデル変数（planner_model等）は pytest_configure で動的に変更されるため、
+# 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
+from . import config as cfg
+from .utils import AllureToolCallbackHandler, generate_screen_info
 
 
 def create_workflow_functions(
@@ -122,7 +125,7 @@ def create_workflow_functions(
                 print(Fore.RED + log_text)
                 allure.attach(
                     task,
-                    name=f"Step [model: {execution_model}]",
+                    name=f"Step [model: {cfg.execution_model}]",
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
@@ -132,7 +135,7 @@ def create_workflow_functions(
 
                 allure.attach(
                     agent_response["messages"][-1].content,
-                    name=f"Response [model: {execution_model}]",
+                    name=f"Response [model: {cfg.execution_model}]",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 elapsed = time.time() - start_time
@@ -222,7 +225,7 @@ def create_workflow_functions(
                     
                 allure.attach(
                     formatted_output,
-                    name=f"🎯Plan [model: {planner_model}]",
+                    name=f"🎯Plan [model: {cfg.planner_model}]",
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
@@ -344,7 +347,6 @@ def create_workflow_functions(
 
                     # 合格判定した場合はその合格判定が正しいかを再評価する
                     # 人間の目視確認が必要な場合はSKIPにする
-                    from config import RESULT_PASS
                     if RESULT_PASS in replan_result.action.status:
                         # 期待動作の抽出（state.inputから期待基準を取得）
                         task_input = state.get("input", "")
@@ -366,7 +368,7 @@ def create_workflow_functions(
 
                     allure.attach(
                         evaluated_response,
-                        name=f"Final Evalution [model: {planner_model}]",
+                        name=f"Final Evalution [model: {cfg.evaluation_model}]",
                         attachment_type=allure.attachment_type.TEXT,
                     )
 
@@ -390,7 +392,7 @@ def create_workflow_functions(
                         
                     allure.attach(
                         formatted_output,
-                        name=f"🧠 Replan Steps [model: {planner_model}]",
+                        name=f"🧠 Replan Steps [model: {cfg.planner_model}]",
                         attachment_type=allure.attachment_type.TEXT,
                     )
                     elapsed = time.time() - start_time

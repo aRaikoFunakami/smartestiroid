@@ -9,13 +9,13 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 import allure
 
-from models import PlanExecute, Plan, Response, Act
-from config import (
+from ..models import PlanExecute, Plan, Response, Act
+from ..config import (
     OPENAI_TIMEOUT, OPENAI_MAX_RETRIES,
     MODEL_STANDARD, KNOWHOW_INFO, RESULT_PASS
 )
-from agents.multi_stage_replanner import MultiStageReplanner
-from utils.allure_logger import log_openai_error_to_allure
+from .multi_stage_replanner import MultiStageReplanner
+from ..utils.allure_logger import log_openai_error_to_allure
 
 
 class SimplePlanner:

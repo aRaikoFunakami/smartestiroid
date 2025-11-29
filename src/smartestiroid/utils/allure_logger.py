@@ -11,7 +11,7 @@ import allure
 from colorama import Fore
 from langchain_core.callbacks import BaseCallbackHandler
 
-from config import OPENAI_TIMEOUT
+from ..config import OPENAI_TIMEOUT
 
 
 class AllureToolCallbackHandler(BaseCallbackHandler):

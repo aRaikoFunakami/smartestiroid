@@ -13,7 +13,7 @@
 
 import asyncio
 import pytest
-from appium_tools import (
+from smartestiroid.appium_tools import (
     find_element,
     get_text,
     click_element,
