@@ -4,14 +4,21 @@ from colorama import Fore, init
 from conftest import SmartestiRoid, agent_session
 import pandas as pd
 import sys
+import os
 
 init(autoreset=True)
+
+# プロジェクトルートディレクトリを取得
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_csv_cases(path: str = "testsheet.csv"):
     """Read CSV and return list[dict] rows.
     Expected columns: ID, Epic, Feature, Story, Title, Description, Step, ExpectedResults, Criteria
     """
+    # 相対パスの場合はプロジェクトルートからの相対パスとして解決
+    if not os.path.isabs(path):
+        path = os.path.join(PROJECT_ROOT, path)
     df = pd.read_csv(path, encoding='utf-8')
     df.columns = [str(c).strip() for c in df.columns]
     # Keep only rows that have at least a Title and Step
