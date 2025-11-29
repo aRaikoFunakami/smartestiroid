@@ -110,12 +110,22 @@ scoop install allure
 ### 1. 依存パッケージのインストール
 
 ```bash
-# Python仮想環境と依存ライブラリを同期
+# リポジトリをクローン
 git clone https://github.com/aRaikoFunakami/smartestiroid.git
 cd smartestiroid
+
+# 外部依存ライブラリ（appium-tools）をクローン
+cd external
+git clone https://github.com/aRaikoFunakami/appium-tools.git
+cd ..
+
+# Python仮想環境と依存ライブラリを同期
 uv python install
 uv sync
 ```
+
+> **Note**: `external/` ディレクトリ内のリポジトリは smartestiroid の git 管理から除外されています。  
+> appium-tools の更新は `external/appium-tools/` 内で個別に `git pull` してください。
 
 ---
 

@@ -1,14 +1,13 @@
 [project]
-name = "test-robot"
+name = "smartestiroid"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI-powered Android app testing framework"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "allure-pytest>=2.15.0",
     "anyio>=4.10.0",
     "appium-python-client>=5.2.4",
-    "appium-tools",
     "asyncio>=4.0.0",
     "colorama>=0.4.6",
     "langchain>=1.0.8",
@@ -28,5 +27,15 @@ dependencies = [
     "typing-extensions>=4.14.1",
 ]
 
-[tool.uv.sources]
-appium-tools = { path = "../appium-tools", editable = true }
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/appium_tools", "src/agents", "src/utils"]
+include = ["src/models.py", "src/config.py", "src/workflow.py"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+
