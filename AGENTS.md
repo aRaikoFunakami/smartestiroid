@@ -1,0 +1,246 @@
+# AGENTS.md - SmartestiRoid 開発ガイド
+
+このドキュメントはAIエージェント（GitHub Copilot、Claude等）がこのプロジェクトで作業する際のガイドラインです。
+
+---
+
+## 📁 プロジェクト構成
+
+```
+smartestiroid/
+├── src/                          # ソースコード
+│   ├── conftest.py               # pytest設定・フィクスチャ
+│   ├── test_android_app.py       # メインテストファイル
+│   ├── config.py                 # 設定（モデル、knowhow等）
+│   ├── models.py                 # データモデル定義
+│   ├── workflow.py               # ワークフロー定義
+│   ├── appium_tools/             # Appium操作ツール群
+│   ├── agents/                   # プランナー/リプランナー
+│   └── utils/                    # ユーティリティ
+├── tests/                        # 単体テスト
+│   ├── test_appium_tools_session.py      # セッション・基本操作テスト
+│   ├── test_appium_tools_element.py      # 要素操作テスト
+│   ├── test_appium_tools_navigation.py   # ナビゲーションテスト
+│   ├── test_appium_tools_app.py          # アプリ管理テスト
+│   ├── test_appium_tools_device.py       # デバイス状態テスト
+│   └── test_appium_tools_token_counter.py # トークンカウンターテスト
+├── testsheet.csv                 # テストケース定義（日本語）
+├── testsheet_en.csv              # テストケース定義（英語）
+├── capabilities.json             # Appium設定
+├── pytest.ini                    # pytest設定
+└── pyproject.toml                # プロジェクト設定
+```
+
+---
+
+## 🔧 パッケージ管理（uv）
+
+このプロジェクトは **uv** を使用してパッケージを管理します。
+
+### 依存ライブラリの追加
+
+```bash
+# 新しいライブラリを追加
+uv add <package-name>
+
+# 開発用ライブラリを追加
+uv add --dev <package-name>
+
+# 例
+uv add requests
+uv add --dev pytest-cov
+```
+
+### 依存関係の同期
+
+```bash
+uv sync
+```
+
+### コマンドの実行
+
+すべてのPythonコマンドは `uv run` を使用して実行します：
+
+```bash
+# pytest実行
+uv run pytest
+
+# Python スクリプト実行
+uv run python script.py
+
+# 特定のモジュール実行
+uv run python -m module_name
+```
+
+---
+
+## 🧪 テスト
+
+### テストファイルの配置
+
+- **単体テスト**: `tests/` ディレクトリに配置
+- **統合テスト（メインテスト）**: `src/test_android_app.py`
+
+### テストファイル命名規則
+
+```
+tests/
+├── conftest.py                           # 共通フィクスチャ
+├── test_appium_tools_session.py          # セッション・基本操作テスト（最小限）
+├── test_appium_tools_element.py          # 要素操作テスト
+├── test_appium_tools_navigation.py       # ナビゲーション・スクロールテスト
+├── test_appium_tools_app.py              # アプリ管理テスト
+├── test_appium_tools_device.py           # デバイス状態テスト
+└── test_appium_tools_token_counter.py    # トークンカウンターテスト（Android不要）
+```
+
+### テスト実行
+
+```bash
+# 全テスト実行
+uv run pytest
+
+# tests/ のみ実行
+uv run pytest tests/
+
+# 最小限のテスト（セッション・基本操作のみ）
+uv run pytest tests/test_appium_tools_session.py
+
+# 要素操作テスト
+uv run pytest tests/test_appium_tools_element.py
+
+# ナビゲーションテスト
+uv run pytest tests/test_appium_tools_navigation.py
+
+# アプリ管理テスト
+uv run pytest tests/test_appium_tools_app.py
+
+# デバイス状態テスト
+uv run pytest tests/test_appium_tools_device.py
+
+# トークンカウンターテスト（Android不要）
+uv run pytest tests/test_appium_tools_token_counter.py
+
+# 特定のテストを実行
+uv run pytest tests/test_appium_tools_session.py -k "test_take_screenshot"
+
+# 詳細出力
+uv run pytest tests/ -v
+
+# メインテスト（Android接続必要）
+uv run pytest src/test_android_app.py -k "TEST_0001"
+```
+
+---
+
+## ⚠️ appium_tools 更新時の必須事項
+
+`src/appium_tools/` を更新した場合は、**必ず以下を実行**してください：
+
+### 1. 関連テストの追加・更新
+
+新しい関数を追加した場合、適切なテストファイルにテストを追加：
+
+| 機能カテゴリ | テストファイル |
+|-------------|---------------|
+| セッション・基本操作 | `test_appium_tools_session.py` |
+| 要素操作 | `test_appium_tools_element.py` |
+| ナビゲーション・スクロール | `test_appium_tools_navigation.py` |
+| アプリ管理 | `test_appium_tools_app.py` |
+| デバイス状態 | `test_appium_tools_device.py` |
+| トークンカウンター | `test_appium_tools_token_counter.py` |
+
+```python
+@pytest.mark.asyncio
+async def test_new_function(driver_session):
+    """新しい関数のテスト"""
+    result = await new_function(param)
+    assert result is not None
+```
+
+### 2. テストの実行
+
+```bash
+# 最小限のテスト（まずこれを実行）
+uv run pytest tests/test_appium_tools_session.py -v
+
+# 変更した機能に関連するテストを実行
+uv run pytest tests/test_appium_tools_<カテゴリ>.py -v
+
+# または全テスト
+uv run pytest tests/ -v
+```
+
+### 3. 動作確認
+
+```bash
+# インポートテスト
+uv run python -c "from appium_tools import appium_driver; print('OK')"
+
+# 実機テスト（Android接続時）
+uv run pytest src/test_android_app.py -k "TEST_0001"
+```
+
+---
+
+## 📝 コーディング規約
+
+### インポート順序
+
+```python
+# 1. 標準ライブラリ
+import asyncio
+import os
+
+# 2. サードパーティ
+import pytest
+from langchain_openai import ChatOpenAI
+
+# 3. ローカルモジュール
+from appium_tools import appium_driver
+from config import MODEL_STANDARD
+```
+
+### 型ヒント
+
+```python
+from typing import Dict, Any, Optional
+
+async def example_function(
+    param1: str,
+    param2: Optional[int] = None
+) -> Dict[str, Any]:
+    ...
+```
+
+---
+
+## 🚀 よく使うコマンド
+
+```bash
+# 依存関係の同期
+uv sync
+
+# テスト実行
+uv run pytest tests/ -v
+
+# メインテスト実行（Android接続必要）
+uv run pytest src/test_android_app.py
+
+# Allureレポート表示
+allure serve allure-results
+
+# インポート確認
+uv run python -c "from appium_tools import appium_driver; print('OK')"
+```
+
+---
+
+## 📋 チェックリスト
+
+コードを変更した際は、以下を確認してください：
+
+- [ ] `uv sync` で依存関係が正しく同期されている
+- [ ] `uv run pytest tests/` でテストがパスする
+- [ ] appium_tools を変更した場合、関連テストを追加・実行した
+- [ ] 新しい依存ライブラリは `uv add` で追加した
