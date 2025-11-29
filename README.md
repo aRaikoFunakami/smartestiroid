@@ -107,11 +107,8 @@ smartestiroid は Python パッケージとして外部プロジェクト（GUI�
 ### 1. インストール
 
 ```bash
-# 外部プロジェクトで smartestiroid を依存関係として追加
-uv add smartestiroid --path /path/to/smartestiroid
-
-# または editable モードで追加（開発中の変更が即座に反映）
-uv add smartestiroid --path /path/to/smartestiroid --editable
+# 外部プロジェクトで smartestiroid を editable モードで追加
+uv add --editable /path/to/smartestiroid
 ```
 
 `pyproject.toml` に以下が追加されます：
