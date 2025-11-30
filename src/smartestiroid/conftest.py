@@ -153,6 +153,46 @@ def pytest_configure(config):
     capabilities_path = cap_path
 
 
+def pytest_collection_modifyitems(session, config, items):
+    """pytest がテストを収集した後に呼ばれる（-k フィルタ適用後）
+    
+    各テストアイテムに実行順と総数を付与する。
+    これにより -k で絞られた実際の実行テスト数を正確に取得できる。
+    
+    注意: このフックは deselect フィルタ適用後に呼ばれるため、
+    items には実際に実行されるテストのみが含まれる。
+    """
+    import sys
+    total = len(items)
+    sys._pytest_total_tests = total
+    sys._pytest_test_order = {}
+    
+    for i, item in enumerate(items, 1):
+        # 各テストに実行順を付与
+        item._test_progress_current = i
+        item._test_progress_total = total
+        # テスト名から順番を引けるようにマップも作成
+        sys._pytest_test_order[item.name] = i
+    
+    # Note: [PROGRESS] collected は pytest_collection_finish で出力
+
+
+def pytest_collection_finish(session):
+    """テスト収集完了後（すべてのフィルタリング適用後）に呼ばれる"""
+    import sys
+    # session.items には最終的に実行されるテストのみが含まれる
+    total = len(session.items)
+    sys._pytest_total_tests = total
+    
+    # 各テストに正しい順番を再設定
+    for i, item in enumerate(session.items, 1):
+        item._test_progress_current = i
+        item._test_progress_total = total
+        sys._pytest_test_order[item.name] = i
+    
+    print(Fore.CYAN + f"\n[PROGRESS] {{\"total\": {total}, \"status\": \"collected\"}}")
+
+
 def pytest_runtest_setup(item):
     """各テスト実行前に現在のテストアイテムを保存"""
     import sys

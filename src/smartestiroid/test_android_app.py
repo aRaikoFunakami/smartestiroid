@@ -33,9 +33,6 @@ def load_csv_cases(path: str = "testsheet.csv"):
 testsheet_path = getattr(sys, '_pytest_testsheet_path', 'testsheet.csv')
 cases = load_csv_cases(testsheet_path)
 
-# テスト進捗管理
-TOTAL_TESTS = len(cases)
-
 
 def create_test_function(case, test_num):
     """動的にテスト関数を作成"""
@@ -59,13 +56,25 @@ def create_test_function(case, test_num):
     @allure.story(story)
     @allure.title(allure_title)
     @allure.description(description)
-    async def dynamic_test(custom_knowhow):  # fixtureを引数に追加
+    async def dynamic_test(request, custom_knowhow):  # request fixture を追加
         """Run one row from testsheet.csv as a test case."""
         
-        # テスト進捗ログ
-        print(Fore.CYAN + "=" * 60)
-        print(Fore.CYAN + f"🚀 テスト進捗: {test_num}/{TOTAL_TESTS} ({(test_num/TOTAL_TESTS)*100:.1f}%)")
-        print(Fore.CYAN + "=" * 60)
+        # pytest_collection_modifyitems で設定された進捗情報を取得
+        current = getattr(request.node, '_test_progress_current', 0)
+        total = getattr(request.node, '_test_progress_total', 0)
+        test_id = cid
+        test_title = title
+        
+        # テスト開始ログ（JSON形式で統一）
+        import json
+        progress_start = json.dumps({
+            "current": current,
+            "total": total,
+            "status": "running",
+            "test_id": test_id,
+            "test_title": test_title
+        }, ensure_ascii=False)
+        print(f"[PROGRESS] {progress_start}")
         
         # Extract fields
         steps = str(case.get("Step", "")).strip() 
@@ -96,10 +105,15 @@ def create_test_function(case, test_num):
             )
             print(Fore.MAGENTA + f"最終応答: {agent_response}")
             
-            # テスト完了ログ
-            print(Fore.GREEN + f"✅ テスト {test_num}/{TOTAL_TESTS} 完了: {title}")
-            if test_num == TOTAL_TESTS:
-                print(Fore.GREEN + "🎉 全テスト完了！")
+            # テスト完了ログ（JSON形式で統一）
+            progress_done = json.dumps({
+                "current": current,
+                "total": total,
+                "status": "passed",
+                "test_id": test_id,
+                "test_title": test_title
+            }, ensure_ascii=False)
+            print(f"[PROGRESS] {progress_done}")
     
     return dynamic_test
 
@@ -114,7 +128,7 @@ for i, case in enumerate(cases, 1):
     # 関数名に使えない文字を置換
     test_name = test_name.replace("-", "_").replace(" ", "_")
     
-    # 動的にテスト関数を作成
+    # 動的にテスト関数を作成（test_num は使わない）
     _temp_func = create_test_function(case, i)
     _temp_func.__name__ = test_name
     
