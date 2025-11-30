@@ -1,15 +1,26 @@
-【重要な前提条件】
-* これは custom_knowhowです
-* 事前に select_platform と create_session を実行済みなので、再度実行してはいけません
+重要な前提条件:
+* 事前に appium とは接続されています
 
-【ツール使用のルール - 必ず守ること】
+ツール使用のルール - 必ず守ること:
 * アプリの操作は、必ずツールを使用して行いなさい
-* アプリの起動や終了も、必ずツールを使用して行いなさい
-* アプリ実行/起動: appium_activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップで良い)
-* アプリ終了: appium_terminate_app を使用せよ
-* 入力確定: appium_press_enter を使用せよ
+* アプリ実行/起動: activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップ処理で良い)
+* アプリ終了: terminate_app を使用せよ
+* URLバー等での入力確定: press_keycode で入力した文字列を press_keycode で <Enter> キーで確定せよ
 
-【カスタムルール例】
-* スクロール操作: 必ず appium_scroll を使用し、画面の80%の範囲でスクロールすること
-* 長押し操作: appium_long_press を2秒間保持して使用すること
-* テキスト検証: 大文字小文字を区別せずに比較すること
+補助ルール:
+* プライバシーポリシーが表示された場合、同意操作を行え
+* ディスクリーマーポリシーが表示された場合、同意操作を行え
+* 初期設定ダイアログが表示された場合はデフォルト設定で対応せよ
+* 広告ダイアログが表示された場合は閉じる操作を行え
+
+ロケーター戦略の制約 (必ず守ること)
+* Androidでは accessibility_id は使用禁止
+* 要素を指定する際は必ず 'id' (resource-id), 'xpath', または 'uiautomator' を使用せよ
+* 例: {'by': 'id', 'value': 'com.android.chrome:id/menu_button'}
+* 例: {'by': 'xpath', 'value': '//android.widget.Button[@content-desc="More options"]'}
+
+厳格ルール:
+* アカウント情報の入力禁止
+* パスワードの入力禁止
+* ログイン操作は禁止
+* アカウントの作成禁止
