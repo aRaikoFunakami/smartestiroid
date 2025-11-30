@@ -185,12 +185,19 @@ def scroll_to_element(by: str, value: str, scrollable_by: str = "xpath", scrolla
     from .session import driver
     
     max_scrolls = 10
+    scroll_count = 0
+    total_scroll_distance = 0
+    
     for i in range(max_scrolls):
         # Try to find the target element
         element, error = _find_element_internal(by, value)
         if element and element.is_displayed():
-            logger.info(f"🔧 Found element by {by} with value {value} after {i} scrolls")
-            return f"Successfully scrolled to element by {by} with value {value}"
+            if scroll_count == 0:
+                logger.info(f"🔧 Found element by {by} with value {value} (already visible, no scroll needed)")
+                return f"Element already visible by {by} with value {value} (no scroll needed)"
+            else:
+                logger.info(f"🔧 Found element by {by} with value {value} after {scroll_count} scroll(s), total distance: {total_scroll_distance}px")
+                return f"Successfully scrolled to element by {by} with value {value} after {scroll_count} scroll(s), total scroll distance: {total_scroll_distance}px"
         
         # If it's a locator error (not just "not found"), return immediately
         if error and "Invalid locator" in error:
@@ -206,6 +213,9 @@ def scroll_to_element(by: str, value: str, scrollable_by: str = "xpath", scrolla
         center_x = location['x'] + size['width'] // 2
         start_y = location['y'] + size['height'] * 0.8
         end_y = location['y'] + size['height'] * 0.2
+        scroll_distance = int(start_y - end_y)
+        total_scroll_distance += scroll_distance
         driver.swipe(int(center_x), int(start_y), int(center_x), int(end_y), 500)
+        scroll_count += 1
     
-    return f"❌ Element not found after scrolling: No element found with by='{by}' and value='{value}' after {max_scrolls} scrolls. IMPORTANT: Use get_page_source() to verify the element exists and check its exact identifiers."
+    return f"❌ Element not found after scrolling: No element found with by='{by}' and value='{value}' after {scroll_count} scrolls (total scroll distance: {total_scroll_distance}px). IMPORTANT: Use get_page_source() to verify the element exists and check its exact identifiers."
