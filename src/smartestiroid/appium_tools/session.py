@@ -1,5 +1,6 @@
 """Session management tools for Appium."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from appium import webdriver
@@ -9,6 +10,9 @@ from langchain.tools import tool
 logger = logging.getLogger(__name__)
 
 driver = None
+
+# セッション終了後のクリーンアップ待機時間（秒）
+SESSION_CLEANUP_WAIT = 3
 
 
 @asynccontextmanager
@@ -35,8 +39,14 @@ async def appium_driver(options: UiAutomator2Options, appium_server_url: str = '
         yield driver_instance
     finally:
         if driver_instance:
-            driver_instance.quit()
+            try:
+                driver_instance.quit()
+            except Exception as e:
+                logger.warning(f"Error during driver quit: {e}")
             driver = None
+            # セッション終了後にクリーンアップを待つ
+            logger.info(f"Waiting {SESSION_CLEANUP_WAIT}s for session cleanup...")
+            await asyncio.sleep(SESSION_CLEANUP_WAIT)
 
 
 @tool
