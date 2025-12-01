@@ -10,11 +10,100 @@ from langchain_core.messages import HumanMessage
 from langgraph.graph import END
 
 from .models import PlanExecute, Response
-from .config import KNOWHOW_INFO, RESULT_PASS
+from .config import KNOWHOW_INFO, RESULT_PASS, RESULT_FAIL
 # モデル変数（planner_model等）は pytest_configure で動的に変更されるため、
 # 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
 from . import config as cfg
 from .utils import AllureToolCallbackHandler, generate_screen_info
+
+
+async def analyze_replan_limit_reached(
+    state: PlanExecute,
+    step_history: list,
+    max_replan_count: int,
+) -> str:
+    """リプラン回数制限到達時に原因分析を行う
+    
+    Args:
+        state: 現在のワークフロー状態
+        step_history: 実行されたステップの履歴
+        max_replan_count: 最大リプラン回数
+        
+    Returns:
+        LLMによる原因分析結果
+    """
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from .config import OPENAI_TIMEOUT, OPENAI_MAX_RETRIES
+    
+    # 分析用のLLMを初期化
+    analysis_llm = ChatOpenAI(
+        model=cfg.evaluation_model,
+        timeout=OPENAI_TIMEOUT,
+        max_retries=OPENAI_MAX_RETRIES,
+    )
+    
+    # ステップ履歴を整形
+    step_history_text = ""
+    for i, step_info in enumerate(step_history, 1):
+        status = "✅ 成功" if step_info.get("success", False) else "❌ 失敗"
+        step_history_text += f"{i}. [{status}] {step_info.get('step', 'Unknown step')}\n"
+        step_history_text += f"   応答: {step_info.get('response', 'No response')[:200]}...\n\n"
+    
+    # past_stepsも整形
+    past_steps_text = ""
+    for step, result in state.get("past_steps", []):
+        past_steps_text += f"- ステップ: {step}\n  結果: {str(result)[:200]}...\n\n"
+    
+    system_prompt = """あなたはソフトウェアテストの専門家です。
+テスト実行がリプラン回数の制限に達して終了した状況を分析し、原因を特定してください。
+
+以下の3つの可能性について言及してください：
+1. **テストケースの問題**: テストシナリオや期待値の設定が不適切である可能性
+2. **テスト対象アプリの問題**: アプリ自体のバグ、UIの変更、応答遅延などの可能性
+3. **テストフレームワーク(smartestiroid)の問題**: ツールの不具合、タイムアウト設定、要素検出の問題など
+
+分析結果はPlantextで以下の形式で出力してください：
+---
+リプラン回数制限到達の分析:
+
+事実:
+何が起きたかの客観的な記述をしなさい
+
+推定原因:
+- テストケースの問題
+- テスト対象アプリの問題
+- テストフレームワークの問題
+
+推奨アクション:
+問題解決のための具体的な提案を記述しなさい
+---
+"""
+
+    user_prompt = f"""以下のテスト実行がリプラン回数制限（{max_replan_count}回）に達して終了しました。
+原因を分析してください。
+
+## テスト入力
+{state.get("input", "不明")}
+
+## 実行されたステップ履歴
+{step_history_text if step_history_text else "履歴なし"}
+
+## 過去のステップと結果
+{past_steps_text if past_steps_text else "履歴なし"}
+
+## 現在の計画
+{state.get("plan", [])}
+"""
+
+    try:
+        response = await analysis_llm.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt),
+        ])
+        return response.content
+    except Exception as e:
+        return f"原因分析中にエラーが発生しました: {str(e)}"
 
 
 def create_workflow_functions(
@@ -287,16 +376,49 @@ def create_workflow_functions(
             if current_replan_count >= max_replan_count:
                 print(
                     Fore.YELLOW
-                    + f"リプラン回数が制限に達しました（{max_replan_count}回）。処理を終了します。"
+                    + f"リプラン回数が制限に達しました（{max_replan_count}回）。原因分析を実行します..."
                 )
+                
+                # LLMによる原因分析を実行
+                analysis_result = await analyze_replan_limit_reached(
+                    state=state,
+                    step_history=step_history["executed_steps"],
+                    max_replan_count=max_replan_count,
+                )
+                
+                # 分析結果をログ出力
+                print(Fore.YELLOW + f"\n{'='*60}")
+                print(Fore.YELLOW + "リプラン回数制限到達 - 原因分析結果")
+                print(Fore.YELLOW + f"{'='*60}")
+                print(Fore.YELLOW + analysis_result)
+                print(Fore.YELLOW + f"{'='*60}\n")
+                
                 elapsed = time.time() - start_time
+                
+                # Allureに分析結果を添付
+                allure.attach(
+                    analysis_result,
+                    name="🔍 リプラン制限到達 - 原因分析",
+                    attachment_type=allure.attachment_type.TEXT,
+                )
                 allure.attach(
                     f"{elapsed:.3f} seconds",
                     name="🧠 Replan Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+                
+                # 結果メッセージを構築
+                response_message = f"""## リプラン回数制限到達
+
+リプラン回数が制限（{max_replan_count}回）に達したため、処理を終了しました。
+現在の進捗: {len(state['past_steps'])}ステップ完了
+
+{analysis_result}
+
+{RESULT_FAIL}"""
+                
                 return {
-                    "response": f"リプラン回数が制限（{max_replan_count}回）に達したため、処理を終了しました。現在の進捗: {len(state['past_steps'])}ステップ完了.",
+                    "response": response_message,
                     "replan_count": current_replan_count + 1,
                 }
             try:
@@ -380,6 +502,37 @@ def create_workflow_functions(
                         name=f"Final Evalution [model: {cfg.evaluation_model}]",
                         attachment_type=allure.attachment_type.TEXT,
                     )
+
+                    # PASSでない場合は原因分析を実行
+                    if RESULT_PASS not in evaluated_response:
+                        print(
+                            Fore.YELLOW
+                            + f"テストがPASSしませんでした。原因分析を実行します..."
+                        )
+                        
+                        # LLMによる原因分析を実行
+                        analysis_result = await analyze_replan_limit_reached(
+                            state=state,
+                            step_history=step_history["executed_steps"],
+                            max_replan_count=current_replan_count + 1,
+                        )
+                        
+                        # 分析結果をログ出力
+                        print(Fore.YELLOW + f"\n{'='*60}")
+                        print(Fore.YELLOW + "テスト失敗 - 原因分析結果")
+                        print(Fore.YELLOW + f"{'='*60}")
+                        print(Fore.YELLOW + analysis_result)
+                        print(Fore.YELLOW + f"{'='*60}\n")
+                        
+                        # Allureに分析結果を添付
+                        allure.attach(
+                            analysis_result,
+                            name="🔍 テスト失敗 - 原因分析",
+                            attachment_type=allure.attachment_type.TEXT,
+                        )
+                        
+                        # 分析結果を含めたレスポンスを構築
+                        evaluated_response = f"""{evaluated_response}\n---\n{analysis_result}"""
 
                     elapsed = time.time() - start_time
                     allure.attach(

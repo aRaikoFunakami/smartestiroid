@@ -526,7 +526,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             print(Fore.MAGENTA + "=" * 60)
 
             # ワークフロー関数を作成（セッション内のツールを使用）
-            max_replan_count = 20
+            max_replan_count = 2
             
             # evaluate_task_resultをラップしてtoken_callbackを渡す
             async def evaluate_with_token_callback(task_input, response, executed_steps, replanner_judgment=None, state_analysis=None):
@@ -673,12 +673,13 @@ class SmartestiRoid:
         if RESULT_SKIP in result_text:
             pytest.skip("このテストは出力結果の目視確認が必要です")
 
-        if RESULT_PASS:
-            result_to_check = result_text.lower()
-            substring_to_check = (
-                RESULT_PASS.lower()
-            )
-            assert substring_to_check in result_to_check, (
-                f"Assertion failed: Expected '{RESULT_PASS}' not found in agent result: '{result_text}'"
-            )
+        # RESULT_FAILが含まれている場合は、テスト失敗として処理
+        if RESULT_FAIL in result_text:
+            # 詳細はworkflow.pyでAllureに添付済みなので、ここでは添付しない
+            pytest.fail(f"テストが失敗しました:\n{result_text}")
+
+        # RESULT_PASSが含まれているか確認
+        if RESULT_PASS.lower() not in result_text.lower():
+            pytest.fail(f"テストが失敗しました:\n{result_text}")
+        
         return result_text
