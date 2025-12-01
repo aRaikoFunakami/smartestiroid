@@ -189,6 +189,10 @@ def create_workflow_functions(
 
     async def plan_step(state: PlanExecute):
         """初期計画を作成する"""
+        # リプラン進捗ログを出力（plan_stepは current=0）
+        import json
+        print(f"[REPLAN_PROGRESS] {json.dumps({'current_replan_count': 0, 'max_replan_count': max_replan_count, 'status': 'planning'})}")
+        
         with allure.step("Action: Plan"):
             import time
 
@@ -270,6 +274,11 @@ def create_workflow_functions(
     async def replan_step(state: PlanExecute):
         """実行結果を評価して計画を再調整する"""
         current_replan_count = state.get("replan_count", 0)
+        
+        # リプラン進捗ログを出力（replan_stepは 1 から順にカウント）
+        import json
+        print(f"[REPLAN_PROGRESS] {json.dumps({'current_replan_count': current_replan_count + 1, 'max_replan_count': max_replan_count, 'status': 'replanning'})}")
+        
         with allure.step(f"Action: Replan [Attempt #{current_replan_count+1}]"):
             import time
 
