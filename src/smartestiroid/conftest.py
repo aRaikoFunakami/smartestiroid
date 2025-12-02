@@ -526,7 +526,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             print(Fore.MAGENTA + "=" * 60)
 
             # ワークフロー関数を作成（セッション内のツールを使用）
-            max_replan_count = 2
+            max_replan_count = 20
             
             # evaluate_task_resultをラップしてtoken_callbackを渡す
             async def evaluate_with_token_callback(task_input, response, executed_steps, replanner_judgment=None, state_analysis=None):
