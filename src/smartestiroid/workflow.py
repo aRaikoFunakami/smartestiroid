@@ -4,6 +4,7 @@ Plan-Executeパターンのワークフロー関数を提供します。
 """
 
 import base64
+from enum import Enum
 import allure
 from colorama import Fore
 from langchain_core.messages import HumanMessage
@@ -17,17 +18,36 @@ from . import config as cfg
 from .utils import AllureToolCallbackHandler, generate_screen_info
 
 
-async def analyze_replan_limit_reached(
+class FailureType(Enum):
+    """テスト失敗の種類を定義するEnum
+    
+    今後の拡張に備えて、失敗タイプを厳密に管理する。
+    新しい失敗タイプを追加する場合は、このEnumに追加すること。
+    """
+    TEST_FAILURE = "test_failure"          # 通常のテスト失敗（目標未達成、アプリ不具合検出など）
+    REPLAN_LIMIT = "replan_limit"          # リプラン回数制限到達
+    # 将来の拡張用:
+    # TIMEOUT = "timeout"                  # タイムアウト
+    # ELEMENT_NOT_FOUND = "element_not_found"  # 要素が見つからない
+    # APP_CRASH = "app_crash"              # アプリクラッシュ
+
+
+async def analyze_test_failure(
     state: PlanExecute,
     step_history: list,
-    max_replan_count: int,
+    replan_count: int,
+    failure_type: FailureType = FailureType.TEST_FAILURE,
 ) -> str:
-    """リプラン回数制限到達時に原因分析を行う
+    """テスト失敗時に原因分析を行う
+    
+    注意: この関数はテスト失敗時のみ呼び出すこと。
+    リプラン回数制限到達時は、この関数を呼び出さずにシンプルなメッセージを返す。
     
     Args:
         state: 現在のワークフロー状態
         step_history: 実行されたステップの履歴
-        max_replan_count: 最大リプラン回数
+        replan_count: 実行されたリプラン回数
+        failure_type: 失敗の種類（FailureType Enum）
         
     Returns:
         LLMによる原因分析結果
@@ -55,8 +75,16 @@ async def analyze_replan_limit_reached(
     for step, result in state.get("past_steps", []):
         past_steps_text += f"- ステップ: {step}\n  結果: {str(result)[:200]}...\n\n"
     
-    system_prompt = """あなたはソフトウェアテストの専門家です。
-テスト実行がリプラン回数の制限に達して終了した状況を分析し、原因を特定してください。
+    # 失敗タイプに応じてプロンプトを設定
+    if failure_type == FailureType.REPLAN_LIMIT:
+        situation_desc = f"テスト実行がリプラン回数の制限（{replan_count}回）に達して終了した状況"
+        output_header = "リプラン回数制限到達の分析"
+    else:  # TEST_FAILURE およびその他
+        situation_desc = "テストが目標を達成できずに失敗した状況"
+        output_header = "テスト失敗の原因分析"
+    
+    system_prompt = f"""あなたはソフトウェアテストの専門家です。
+{situation_desc}を分析し、原因を特定してください。
 
 以下の3つの可能性について言及してください：
 1. **テストケースの問題**: テストシナリオや期待値の設定が不適切である可能性
@@ -65,7 +93,7 @@ async def analyze_replan_limit_reached(
 
 分析結果はPlantextで以下の形式で出力してください：
 ---
-リプラン回数制限到達の分析:
+{output_header}:
 
 事実:
 何が起きたかの客観的な記述をしなさい
@@ -80,7 +108,7 @@ async def analyze_replan_limit_reached(
 ---
 """
 
-    user_prompt = f"""以下のテスト実行がリプラン回数制限（{max_replan_count}回）に達して終了しました。
+    user_prompt = f"""以下のテスト実行が失敗しました。
 原因を分析してください。
 
 ## テスト入力
@@ -155,7 +183,7 @@ def create_workflow_functions(
 
             start_time = time.time()
             if not plan:
-                return {"past_steps": [("error", "計画が空です")]}
+                return {"past_steps": [("[SYSTEM_SKIP]", "計画ステップなし - リプランが必要")]}
             plan_str = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan))
             task = plan[0]
             
@@ -206,7 +234,10 @@ def create_workflow_functions(
 【厳格ルール】
 - ツールを用いて、上記のステップ「{task}」のみを実行しなさい
 
-- 画像とロケーター情報から対象要素を特定してツールを使用すること
+【画面情報の活用方法】
+- 画像とロケーター情報の情報を突き合わせて画面オブジェクトの位置情報を正確に分析しなさい
+- 操作対象の要素を特定してツールを使用すること
+- 複数の要素が類似している場合は、ステップの指示と bounds や resource-id や class 名を参考に正確に特定すること
 
 画面ロケーター情報:
 {locator}"""
@@ -488,29 +519,17 @@ def create_workflow_functions(
             if current_replan_count >= max_replan_count:
                 print(
                     Fore.YELLOW
-                    + f"リプラン回数が制限に達しました（{max_replan_count}回）。原因分析を実行します..."
+                    + f"リプラン回数が制限に達しました（{max_replan_count}回）。処理を終了します。"
                 )
-                
-                # LLMによる原因分析を実行
-                analysis_result = await analyze_replan_limit_reached(
-                    state=state,
-                    step_history=step_history["executed_steps"],
-                    max_replan_count=max_replan_count,
-                )
-                
-                # 分析結果をログ出力
-                print(Fore.YELLOW + f"\n{'='*60}")
-                print(Fore.YELLOW + "リプラン回数制限到達 - 原因分析結果")
-                print(Fore.YELLOW + f"{'='*60}")
-                print(Fore.YELLOW + analysis_result)
-                print(Fore.YELLOW + f"{'='*60}\n")
                 
                 elapsed = time.time() - start_time
                 
-                # Allureに分析結果を添付
+                # Allureにリプラン制限到達を記録
                 allure.attach(
-                    analysis_result,
-                    name="🔍 リプラン制限到達 - 原因分析",
+                    f"リプラン回数が制限（{max_replan_count}回）に達しました。\n"
+                    f"完了ステップ数: {len(state['past_steps'])}\n"
+                    f"テストは失敗として終了します。",
+                    name="⚠️ リプラン回数制限到達",
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 allure.attach(
@@ -519,13 +538,11 @@ def create_workflow_functions(
                     attachment_type=allure.attachment_type.TEXT,
                 )
                 
-                # 結果メッセージを構築
+                # 結果メッセージを構築（LLM分析は呼び出さない）
                 response_message = f"""## リプラン回数制限到達
 
 リプラン回数が制限（{max_replan_count}回）に達したため、処理を終了しました。
 現在の進捗: {len(state['past_steps'])}ステップ完了
-
-{analysis_result}
 
 {RESULT_FAIL}"""
                 
@@ -642,11 +659,12 @@ def create_workflow_functions(
                             + f"テストがPASSしませんでした。原因分析を実行します..."
                         )
                         
-                        # LLMによる原因分析を実行
-                        analysis_result = await analyze_replan_limit_reached(
+                        # LLMによる原因分析を実行（通常のテスト失敗）
+                        analysis_result = await analyze_test_failure(
                             state=state,
                             step_history=step_history["executed_steps"],
-                            max_replan_count=current_replan_count + 1,
+                            replan_count=current_replan_count + 1,
+                            failure_type=FailureType.TEST_FAILURE,
                         )
                         
                         # 分析結果をログ出力

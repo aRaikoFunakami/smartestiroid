@@ -460,6 +460,8 @@ class SimplePlanner:
 ブロッキングダイアログ: {state_analysis.blocking_dialogs or "なし"}
 テスト進捗: {state_analysis.test_progress}
 検出された問題: {state_analysis.problems_detected or "なし"}
+アプリ不具合検出: {"Yes - " + (state_analysis.app_defect_reason or "詳細不明") if state_analysis.app_defect_detected else "No"}
+スタック状態: {"Yes" if state_analysis.is_stuck else "No"}
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
 現在の目標ステップ根拠: {state_analysis.current_objective_evidence}
 全体の目標達成: {"Yes" if state_analysis.goal_achieved else "No"}
@@ -541,7 +543,8 @@ class SimplePlanner:
                     original_plan=state["plan"],
                     past_steps=state["past_steps"],
                     state_analysis=state_analysis,
-                    objective_progress=objective_progress
+                    objective_progress=objective_progress,
+                    locator=locator  # ブロッキングダイアログ処理用にロケーター情報を渡す
                 )
                 print(Fore.YELLOW + f"📋 Plan生成完了: {len(plan.steps)}ステップ")
                 return Act(

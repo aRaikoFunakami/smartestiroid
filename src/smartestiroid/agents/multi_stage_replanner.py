@@ -27,9 +27,14 @@ class StateAnalysis(BaseModel):
     screen_changes: str = Field(description="前ステップからの画面変化と差分（UI要素の追加/削除/変更）")
     current_screen_type: str = Field(description="現在の画面の種類（例：ホーム画面、検索結果、設定画面など）")
     main_elements: str = Field(description="画面上の主要UI要素の説明")
-    blocking_dialogs: Optional[str] = Field(default=None, description="目標達成を妨げるダイアログやオーバーレイがある場合、その内容と閉じ方")
+    blocking_dialogs: Optional[str] = Field(default=None, description="目標達成を妨げるダイアログやオーバーレイがある場合、その内容と閉じるためのボタンのresource-id（例：'利用規約ダイアログ、閉じるボタン: com.example:id/agree_button'）")
     test_progress: str = Field(description="テスト進捗の評価（定量的または定性的）")
     problems_detected: Optional[str] = Field(default=None, description="異常挙動・エラー・予期しない遷移がある場合、その詳細")
+    
+    # アプリ不具合の検出（新規追加）
+    app_defect_detected: bool = Field(default=False, description="アプリの不具合が検出されたかどうか（クラッシュ、フリーズ、予期しないエラー、操作不能など）")
+    app_defect_reason: Optional[str] = Field(default=None, description="アプリ不具合の詳細（検出された場合のみ）")
+    is_stuck: bool = Field(default=False, description="同じ操作を繰り返しても進捗がない状態（スタック状態）かどうか")
     
     # 目標ステップ単位の評価（新規追加）
     current_objective_achieved: bool = Field(description="現在の目標ステップが達成されているかどうか")
@@ -132,19 +137,33 @@ class MultiStageReplanner:
 【「確認する」目標の判定基準】（重要）
 - 「〇〇を確認する」「〇〇ダイアログを確認する」目標の場合:
   - 対象が画面に表示されている → 「達成」（表示を確認できた）
-  - 対象が画面に表示されていない → 「達成」（非表示を確認できた）
-  - 重要: 「確認する」とは「有無を確認する」こと
-  - 対象が存在しないことも、確認の結果として「達成」と判定する
+  - 対象が画面に表示されていない → 「未達成」（表示されていないので確認できない）
+  - ブロッキング要素がないのに対象が表示されていない場合は、未達成と判断し、テストに失敗を報告すること
+
+【★アプリ不具合の検出★】（重要）
+以下のいずれかに該当する場合は、app_defect_detected=True として報告すること:
+- アプリがクラッシュした（ホーム画面に戻った、「アプリが停止しました」ダイアログが表示など）
+- 予期しないエラーダイアログが表示された（「問題が発生しました」「エラー」など）
+- アプリがフリーズして操作できない
+- 同じ操作を繰り返しても画面が変化しない（スタック状態）→ is_stuck=True も設定
+- 目標の操作対象が存在せず、これ以上テストを進められない
+- 画面が真っ白/真っ黒になった
+- 操作したボタンが反応しない（複数回試行後も）
+
+アプリ不具合を検出した場合は、app_defect_reason に詳細を記載すること。
 
 【分析指示】
 1. 前ステップからの画面変化と差分（UI要素の追加/削除/変更）
 2. 現在の画面の種類（例：ホーム画面、検索結果、設定画面など）
 3. 画面上の主要UI要素の説明 (ボタン、テキストフィールド、画像、リスト、メニュー、ダイアログ、背景などを resource-id や class 名で具体的に記述)
 4. 目標達成を妨げるダイアログやオーバーレイの有無（★超重要★これがあればまず処理が必要）
-5. 現在の目標ステップが達成されているかどうか
-6. 現在の目標ステップの達成/未達成の根拠
-7. 全体の目標が達成されているかどうか
-8. 次に実行すべきアクションの提案（任意）
+   ★ブロッキングダイアログを検出した場合は、閉じるためのボタンの resource-id も blocking_dialogs に記載すること★
+   例: 「利用規約ダイアログ、閉じるボタン: com.example.app:id/terms_agree」
+5. アプリの不具合が検出されたかどうか（★重要★）
+6. 現在の目標ステップが達成されているかどうか
+7. 現在の目標ステップの達成/未達成の根拠
+8. 全体の目標が達成されているかどうか
+9. 次に実行すべきアクションの提案（任意）
 
 【ブロッキング要素の判定基準】（★重要★）
 以下に該当する画面は「目標達成を妨げるダイアログやオーバーレイ」として報告すること:
@@ -155,7 +174,6 @@ class MultiStageReplanner:
 - 広告や通知の許可を求める画面
 - 位置情報やカメラなどのパーミッション許可画面
 - その他、目標の操作対象（メニューアイコン等）が画面に表示されていない原因となる画面
-
 【★例外★】ブロッキングと判定しないケース:
 現在の目標ステップがダイアログ自体を操作対象としている場合は、ブロッキングとして報告しないこと。
 例:
@@ -193,6 +211,11 @@ class MultiStageReplanner:
         print(Fore.CYAN + f"  - current_objective_achieved: {state_analysis.current_objective_achieved}")
         print(Fore.CYAN + f"  - goal_achieved: {state_analysis.goal_achieved}")
         print(Fore.CYAN + f"  - blocking_dialogs: {state_analysis.blocking_dialogs or 'None'}")
+        print(Fore.CYAN + f"  - app_defect_detected: {state_analysis.app_defect_detected}")
+        if state_analysis.app_defect_detected:
+            print(Fore.RED + f"  - app_defect_reason: {state_analysis.app_defect_reason}")
+        if state_analysis.is_stuck:
+            print(Fore.RED + f"  - is_stuck: True")
         return state_analysis
 
     
@@ -218,16 +241,22 @@ class MultiStageReplanner:
         # 目標ステップの進捗情報を構築
         objective_info = ""
         all_objectives_completed = False
+        is_last_objective = False
         if objective_progress:
             all_objectives_completed = objective_progress.is_all_objectives_completed()
             completed_count = objective_progress.get_completed_objectives_count()
             total_count = objective_progress.get_total_objectives_count()
+            
+            # 現在の目標ステップが達成されたら全目標達成かどうかを判定
+            remaining_after_current = total_count - completed_count - (1 if state_analysis.current_objective_achieved else 0)
+            is_last_objective = remaining_after_current <= 0 and state_analysis.current_objective_achieved
             
             objective_info = f"""
 【ユーザー目標ステップの進捗】
 完了: {completed_count}/{total_count}
 全目標達成: {"Yes" if all_objectives_completed else "No"}
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
+現在の目標が最後の目標: {"Yes" if is_last_objective else "No"}
 """
 
         # StateAnalysisから状態要約を構築
@@ -238,6 +267,8 @@ class MultiStageReplanner:
 ブロッキングダイアログ: {state_analysis.blocking_dialogs or "なし"}
 テスト進捗: {state_analysis.test_progress}
 検出された問題: {state_analysis.problems_detected or "なし"}
+アプリ不具合検出: {"Yes - " + (state_analysis.app_defect_reason or "詳細不明") if state_analysis.app_defect_detected else "No"}
+スタック状態: {"Yes" if state_analysis.is_stuck else "No"}
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
 現在の目標ステップ根拠: {state_analysis.current_objective_evidence}
 全体の目標達成: {"Yes" if state_analysis.goal_achieved else "No"}
@@ -259,10 +290,20 @@ class MultiStageReplanner:
 【判断基準（厳格）】
 ★重要★ 判断基準は「ユーザー目標ステップ」の達成度です。LLM実行計画の進捗ではありません。
 
+★最優先★ アプリ不具合の検出:
+0. アプリの不具合が検出された場合 → decision=RESPONSE（テスト失敗として報告）
+   - アプリがクラッシュした
+   - 予期しないエラーダイアログが表示された
+   - アプリがフリーズして操作できない
+   - 同じ操作を繰り返しても状態が変わらない（スタック状態）
+   - 目標の操作対象が存在せず、これ以上進めない
+
+通常の判断:
 1. ブロッキングダイアログがある → decision=PLAN（まず障害物を処理）
 2. 現在の目標ステップが未達成 → decision=PLAN
-3. 現在の目標ステップが達成済みで、まだ次の目標ステップがある → decision=PLAN
-4. 全ての目標ステップが達成済み → decision=RESPONSE
+3. 現在の目標ステップが達成済みで、かつ「現在の目標が最後の目標: Yes」の場合 → decision=RESPONSE（テスト成功として報告）
+4. 現在の目標ステップが達成済みで、まだ次の目標ステップがある場合 → decision=PLAN
+5. 全ての目標ステップが達成済み → decision=RESPONSE（テスト成功として報告）
 
 【出力仕様】
 厳格なJSON
@@ -294,7 +335,8 @@ class MultiStageReplanner:
         original_plan: list,
         past_steps: list,
         state_analysis: StateAnalysis,
-        objective_progress: Optional[ObjectiveProgress] = None
+        objective_progress: Optional[ObjectiveProgress] = None,
+        locator: str = ""
     ) -> Plan:
         """ステージ3a: 次のPlanを作成
         
@@ -304,6 +346,7 @@ class MultiStageReplanner:
             past_steps: 完了済みステップ
             state_analysis: analyze_stateからの構造化された状態分析結果
             objective_progress: 目標進捗管理オブジェクト
+            locator: 画面のロケーター情報（ブロッキングダイアログ処理用）
         """
         remaining = original_plan[len(past_steps):]
         total_steps = len(original_plan)
@@ -346,6 +389,15 @@ class MultiStageReplanner:
 次のアクション提案: {state_analysis.suggested_next_action or "なし"}
 """
         
+        # ロケーター情報セクション（ブロッキングダイアログ処理用）
+        locator_section = ""
+        if locator and state_analysis.blocking_dialogs:
+            locator_section = f"""
+【★重要★ 現在の画面ロケーター情報】
+ブロッキングダイアログを閉じるために、以下のロケーター情報から適切なボタン（同意、OK、閉じる等）を見つけてください:
+{locator}
+"""
+        
         prompt = f"""
 あなたは実行計画を作成するエキスパートです。
 
@@ -355,7 +407,7 @@ class MultiStageReplanner:
 
 【現在の状態分析結果】
 {state_summary}
-
+{locator_section}
 【LLM実行計画の進捗】（参考情報）
 計画総ステップ数: {total_steps}
 完了済みステップ数: {completed_steps}
@@ -377,6 +429,10 @@ class MultiStageReplanner:
 現在の目標ステップを達成するために必要な最適なステップ列を作成してください：
 
 ★最優先★ ブロッキング画面の処理:
+- ブロッキングダイアログが検出されている場合:
+  → 状態分析結果のblocking_dialogsに記載されているresource-idを使って閉じるステップを生成する
+  → 例: 「resource-id 'com.example:id/agree_button' をタップして利用規約に同意する」
+  → ロケーター情報が提供されている場合は、そこから適切なボタン（同意、OK、閉じる等）を見つけて使用する
 - 初期設定画面、プライバシー画面、オンボーディング画面が表示されている場合:
   → まずこれを完了させるステップを生成する
   → 「More」「Next」「Accept」「OK」「Got it」「同意する」などのボタンを押して先に進む
@@ -469,11 +525,22 @@ class MultiStageReplanner:
 達成判断理由: {state_analysis.goal_achievement_reason}
 """
         
+        # アプリ不具合情報を追加
+        defect_info = ""
+        if state_analysis.app_defect_detected:
+            defect_info = f"""
+【★アプリ不具合検出★】
+不具合が検出されました: {state_analysis.app_defect_reason or "詳細不明"}
+スタック状態: {"Yes" if state_analysis.is_stuck else "No"}
+検出された問題: {state_analysis.problems_detected or "なし"}
+"""
+        
         prompt = f"""あなたはタスク完了報告を作成するエキスパートです。
 
 【目標】
 {goal}
 {objective_summary}
+{defect_info}
 
 【現在の状態分析結果】
 {state_summary}
@@ -484,12 +551,14 @@ class MultiStageReplanner:
 【タスク】
 タスクの完了を報告してください。以下を含めること：
 1. status: {RESULT_PASS} または {RESULT_FAIL} のいずれかを設定
-   - 全ての目標ステップが達成されている場合は RESULT_PASS
-   - 目標ステップが未達成の場合は RESULT_FAIL
+   - 全ての目標ステップが達成されている場合は {RESULT_PASS}
+   - 目標ステップが未達成の場合は {RESULT_FAIL}
+   - ★アプリ不具合が検出された場合は必ず {RESULT_FAIL}★
 2. reason: 完了理由の詳細（100〜600文字程度）
    - 各目標ステップの達成状況
    - 達成の根拠（ロケーター情報や画面状態）
    - 未達成がある場合はその理由
+   - ★アプリ不具合が検出された場合は、その詳細を必ず記載すること★
 
 出力形式:
 厳格なJSON形式（status と reason フィールドを持つ）
