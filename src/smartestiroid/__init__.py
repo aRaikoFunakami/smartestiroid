@@ -36,6 +36,11 @@ from .models import (
     Plan,
     Response,
     Act,
+    ObjectiveStep,
+    ObjectiveProgress,
+    ObjectiveStepResult,
+    ParsedObjectiveSteps,
+    ExecutedAction,
 )
 
 __version__ = "0.1.0"
@@ -57,4 +62,9 @@ __all__ = [
     "Plan",
     "Response",
     "Act",
+    "ObjectiveStep",
+    "ObjectiveProgress",
+    "ObjectiveStepResult",
+    "ParsedObjectiveSteps",
+    "ExecutedAction",
 ]

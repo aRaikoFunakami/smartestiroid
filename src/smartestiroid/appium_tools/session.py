@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from appium import webdriver
 from appium.options.android import UiAutomator2Options
 from langchain.tools import tool
+from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,50 @@ driver = None
 
 # セッション終了後のクリーンアップ待機時間（秒）
 SESSION_CLEANUP_WAIT = 3
+
+
+def is_session_active() -> bool:
+    """Check if the current Appium session is still active.
+    
+    This function performs a lightweight check to verify the session is valid.
+    
+    Returns:
+        True if session is active, False otherwise
+    """
+    global driver
+    if driver is None:
+        return False
+    
+    try:
+        # session_id が存在するかチェック（軽量な確認）
+        session_id = driver.session_id
+        if session_id is None:
+            logger.warning("Session ID is None - session may be terminated")
+            return False
+        return True
+    except (InvalidSessionIdException, WebDriverException) as e:
+        logger.warning(f"Session check failed: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Unexpected error during session check: {e}")
+        return False
+
+
+def verify_session_or_raise() -> None:
+    """Verify that the Appium session is active, raise if not.
+    
+    This should be called before critical operations to provide
+    a clear error message if the session has been terminated.
+    
+    Raises:
+        InvalidSessionIdException: If the session is not active
+    """
+    if not is_session_active():
+        raise InvalidSessionIdException(
+            "Appium session is not active. "
+            "The session may have been terminated by the server due to timeout, "
+            "device disconnection, or an internal error."
+        )
 
 
 @asynccontextmanager

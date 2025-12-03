@@ -9,7 +9,7 @@ from colorama import Fore
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END
 
-from .models import PlanExecute, Response
+from .models import PlanExecute, Response, ExecutionProgress, ObjectiveProgress
 from .config import KNOWHOW_INFO, RESULT_PASS, RESULT_FAIL
 # モデル変数（planner_model等）は pytest_configure で動的に変更されるため、
 # 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
@@ -138,6 +138,12 @@ def create_workflow_functions(
     # ステップ履歴キャッシュ（クロージャ内で管理）
     step_history = {"executed_steps": []}
     
+    # 進捗追跡（計画ステップとツール呼び出しの関係を管理）
+    execution_progress = {"progress": None}  # ExecutionProgressオブジェクトを格納
+    
+    # 目標進捗管理（ユーザー目標ステップの進捗を管理）
+    objective_progress_cache = {"progress": None}  # ObjectiveProgressオブジェクトを格納
+    
     # ツール呼び出し履歴を記録するコールバックハンドラー
     tool_callback = AllureToolCallbackHandler()
 
@@ -152,6 +158,19 @@ def create_workflow_functions(
                 return {"past_steps": [("error", "計画が空です")]}
             plan_str = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan))
             task = plan[0]
+            
+            # 現在の進捗を取得（なければ作成）
+            if execution_progress["progress"] is None:
+                execution_progress["progress"] = ExecutionProgress(original_plan=plan)
+                tool_callback.set_execution_progress(execution_progress["progress"])
+            
+            # 現在のステップインデックスを計算
+            # past_stepsの数 = 完了済みステップ数
+            completed_count = len(state.get("past_steps", []))
+            current_step_index = completed_count
+            
+            # ステップ実行を開始
+            tool_callback.start_step(current_step_index, task)
             
             # 現在の画面情報を取得
             locator, image_url = await generate_screen_info(
@@ -172,31 +191,32 @@ def create_workflow_functions(
                 )
             
             # タスクにロケーター情報と画像相互補完の指示を含める（LLMには生データを渡す）
-            task_formatted = f"""以下の計画について: {plan_str}
+            # 進捗情報を計算
+            total_steps = len(plan)
+            step_number = current_step_index + 1  # 1-indexed for display
+            remaining_steps = total_steps - step_number
+            
+            task_formatted = f"""【あなたの担当】
+ステップ{step_number}/{total_steps}: {task}
 
-あなたはステップ1の実行を担当します: {task}
+【厳格ルール】
+⚠️ 上記のステップ「{task}」のみを実行してください。
+⚠️ このステップが完了したら、追加の操作をせずに終了してください。
+⚠️ 次のステップは別のエージェントが担当します。先回りして実行しないでください。
 
-【重要】画面操作後の必須ルール:
-ボタンのクリック、画面のスクロール、テキスト入力など、画面の変更を起こす操作をした後は、
-必ず get_page_source() を呼び出して最新の画面状態を取得してから、次の操作を行ってください。
-古い画面情報で操作すると、存在しない要素のIDで操作しようとしてエラーになります。
+【ステップ完了の判断基準】
+- 「activate_app」「terminate_app」→ 該当ツールを1回呼び出したら完了
+- 「〇〇をタップ」「〇〇をクリック」→ click_element を1回実行したら完了
+- 「〇〇を入力」→ send_keys を1回実行したら完了
+- 「〇〇を確認」「〇〇が表示されていることを確認」→ get_page_source で確認したら完了
 
-【重要】テキスト入力について:
-send_keys() は EditText や TextField などの入力フィールドにのみ使用できます。
-入力前に get_page_source() で最新の画面状態を確認し、正しい入力フィールドを特定してください。
+【全体計画（参考）】
+{plan_str}
 
-【重要】画像とロケーター情報の相互補完について:
-- 画像には視覚的に見えるアイコンやボタンの位置情報が含まれています
-- ロケーター情報には画像で見えない要素のID/XPath/bounds座標が含まれています
-- 両方の情報を突き合わせて、ターゲット要素を特定してください
-
-例：
-• 画像で「Prime Video」アイコンが見えるが、ロケーターに明確なラベルがない場合
-  → 画像の位置とロケーターのbounds座標を照合して要素を特定
-• ロケーターに特定のresource-idがあるが、画像では見えない要素の場合
-  → ロケーター情報から直接IDやXPathを使用してアクセス
-
-必ず画像とロケーターの両方を確認し、最も確実な方法でターゲット要素を操作してください。
+【画面操作時の注意】
+- 画面の変更を起こす操作後に続けて操作を行う場合は get_page_source() で最新状態を取得
+- send_keys() は EditText/TextField にのみ使用可能
+- 画像とロケーター情報を突き合わせて要素を特定
 
 画面ロケーター情報:
 {locator}"""
@@ -225,6 +245,12 @@ send_keys() は EditText や TextField などの入力フィールドにのみ�
                     task,
                     name=f"Step [model: {cfg.execution_model}]",
                     attachment_type=allure.attachment_type.TEXT,
+                )
+
+                # ステップ完了を記録
+                tool_callback.complete_step(
+                    agent_response["messages"][-1].content,
+                    success=True
                 )
 
                 # ツール呼び出し履歴を Allure に保存
@@ -259,6 +285,10 @@ send_keys() は EditText や TextField などの入力フィールドにのみ�
             except Exception as e:
                 error_msg = str(e)
                 print(Fore.RED + f"execute_stepでエラー: {e}")
+                
+                # ステップ失敗を記録
+                tool_callback.complete_step(f"Error: {error_msg}", success=False)
+                
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f} seconds",
@@ -343,6 +373,32 @@ send_keys() は EditText や TextField などの入力フィールドにのみ�
 
                 # ステップ履歴を初期化
                 step_history["executed_steps"] = []
+                
+                # 進捗追跡を初期化（新しい計画で開始）
+                execution_progress["progress"] = ExecutionProgress(original_plan=plan.steps)
+                tool_callback.set_execution_progress(execution_progress["progress"])
+                
+                # 目標進捗管理を初期化（ユーザー入力を目標ステップに解析）
+                try:
+                    objective_progress = await planner.parse_objective_steps(state["input"])
+                    # 最初の目標ステップに実行計画を設定
+                    current_objective = objective_progress.get_current_step()
+                    if current_objective:
+                        current_objective.execution_plan = plan.steps
+                        current_objective.status = "in_progress"
+                    objective_progress_cache["progress"] = objective_progress
+                    
+                    # 目標ステップをログ出力
+                    objective_summary = objective_progress.get_summary()
+                    print(Fore.GREEN + f"📋 目標ステップ解析完了:\n{objective_summary}")
+                    allure.attach(
+                        objective_summary,
+                        name="📋 Objective Steps (User Goals)",
+                        attachment_type=allure.attachment_type.TEXT,
+                    )
+                except Exception as e:
+                    print(Fore.YELLOW + f"⚠️ 目標解析スキップ（従来モードで継続）: {e}")
+                    objective_progress_cache["progress"] = None
 
                 return {
                     "plan": plan.steps,
@@ -363,6 +419,13 @@ send_keys() は EditText や TextField などの入力フィールドにのみ�
 
                 # ステップ履歴も初期化
                 step_history["executed_steps"] = []
+                
+                # 進捗追跡を初期化（フォールバック計画で開始）
+                execution_progress["progress"] = ExecutionProgress(original_plan=basic_plan.steps)
+                tool_callback.set_execution_progress(execution_progress["progress"])
+                
+                # フォールバック時は目標解析をスキップ
+                objective_progress_cache["progress"] = None
 
                 return {
                     "plan": basic_plan.steps,
@@ -373,12 +436,46 @@ send_keys() は EditText や TextField などの入力フィールドにのみ�
         """実行結果を評価して計画を再調整する"""
         current_replan_count = state.get("replan_count", 0)
         
+        # 進捗サマリーを取得
+        progress_summary = ""
+        if execution_progress["progress"]:
+            progress_summary = execution_progress["progress"].get_progress_summary()
+            print(Fore.CYAN + f"\n{'='*50}")
+            print(Fore.CYAN + "📊 現在の進捗状況:")
+            print(Fore.CYAN + progress_summary)
+            print(Fore.CYAN + f"{'='*50}\n")
+        
+        # 目標進捗サマリーを取得
+        objective_summary = ""
+        if objective_progress_cache.get("progress"):
+            objective_summary = objective_progress_cache["progress"].get_summary()
+            print(Fore.CYAN + f"\n{'='*50}")
+            print(Fore.CYAN + "🎯 目標ステップ進捗:")
+            print(Fore.CYAN + objective_summary)
+            print(Fore.CYAN + f"{'='*50}\n")
+        
         # リプラン進捗ログを出力（replan_stepは 1 から順にカウント）
         import json
         print(f"[REPLAN_PROGRESS] {json.dumps({'current_replan_count': current_replan_count + 1, 'max_replan_count': max_replan_count, 'status': 'replanning'})}")
         
         with allure.step(f"Action: Replan [Attempt #{current_replan_count+1}]"):
             import time
+            
+            # 進捗サマリーをAllureに添付
+            if progress_summary:
+                allure.attach(
+                    progress_summary,
+                    name="📊 Execution Progress Before Replan",
+                    attachment_type=allure.attachment_type.TEXT,
+                )
+            
+            # 目標進捗をAllureに添付
+            if objective_summary:
+                allure.attach(
+                    objective_summary,
+                    name="🎯 Objective Progress Before Replan",
+                    attachment_type=allure.attachment_type.TEXT,
+                )
 
             start_time = time.time()
             # リプラン回数制限チェック
@@ -466,7 +563,8 @@ send_keys() は EditText や TextField などの入力フィールドにのみ�
 
                 # 前回画像と現在画像を使ってリプラン
                 replan_result = await planner.replan(
-                    state, locator, image_url, previous_image_url
+                    state, locator, image_url, previous_image_url,
+                    objective_progress=objective_progress_cache.get("progress")
                 )
 
                 # 現在画像を次回用にキャッシュに保存
@@ -572,8 +670,19 @@ send_keys() は EditText や TextField などの入力フィールドにのみ�
                         name="⏱️ Replan Step Time",
                         attachment_type=allure.attachment_type.TEXT,
                     )
+                    
+                    # リプラン後の新しい計画で進捗を更新
+                    # 注意: リプランは残りステップの再計画なので、完了済みステップは保持
+                    new_plan = replan_result.action.steps
+                    if execution_progress["progress"]:
+                        # 完了済みステップ数を保持しつつ、新しい計画を設定
+                        completed_count = execution_progress["progress"].get_completed_count()
+                        # 新しい計画は「残りのステップ」なので、original_planは更新しない
+                        # current_step_indexを調整
+                        execution_progress["progress"].current_step_index = completed_count
+                    
                     return {
-                        "plan": replan_result.action.steps,
+                        "plan": new_plan,
                         "replan_count": current_replan_count + 1,
                     }
             except Exception as e:
