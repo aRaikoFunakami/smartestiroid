@@ -580,97 +580,9 @@ def create_workflow_functions(
                     + f"Replanner Output (replan #{current_replan_count + 1}): {replan_result}"
                 )
                 
-                # 目標ステップの完了処理
-                # current_objective_achievedがTrueの場合、現在の目標ステップを完了にして次に進める
+                # 注: 目標ステップの完了処理は simple_planner.py の replan() 内で行われる
+                # workflow.py では replan_result をそのまま使用する
                 objective_progress = objective_progress_cache.get("progress")
-                if replan_result.current_objective_achieved and objective_progress:
-                    evidence = replan_result.current_objective_evidence or "状態分析により達成確認"
-                    current_step = objective_progress.get_current_step()
-                    
-                    # デバッグ情報
-                    print(Fore.YELLOW + f"🔍 [DEBUG] 目標進捗:")
-                    print(Fore.YELLOW + f"  current_step_index: {objective_progress.current_step_index}")
-                    print(Fore.YELLOW + f"  total_objectives: {objective_progress.get_total_objectives_count()}")
-                    print(Fore.YELLOW + f"  completed_objectives: {objective_progress.get_completed_objectives_count()}")
-                    for s in objective_progress.objective_steps:
-                        print(Fore.YELLOW + f"  [{s.index}] {s.description[:30]}... status={s.status}")
-                    
-                    if current_step and current_step.status != "completed":
-                        print(Fore.GREEN + f"✅ 目標ステップ完了: [{current_step.index}] {current_step.description[:50]}...")
-                        objective_progress.mark_current_completed(evidence=evidence)
-                        
-                        # 次の目標ステップに進む
-                        has_next = objective_progress.advance_to_next_objective()
-                        
-                        # デバッグ: advance_to_next_objective の結果
-                        print(Fore.YELLOW + f"🔍 [DEBUG] advance_to_next_objective() = {has_next}")
-                        print(Fore.YELLOW + f"  After advance - current_step_index: {objective_progress.current_step_index}")
-                        for s in objective_progress.objective_steps:
-                            print(Fore.YELLOW + f"  [{s.index}] status={s.status}")
-                        
-                        if has_next:
-                            # 次の目標があるので、その目標に対する新しい計画を作成
-                            next_objective = objective_progress.get_current_step()
-                            print(Fore.CYAN + f"🎯 次の目標ステップに進みます: [{next_objective.index}] {next_objective.description[:50]}...")
-                            
-                            # 新しい目標に対する実行計画を作成（全目標ステップを渡して境界を明確に）
-                            screen_analysis = await planner.analyze_screen(locator, image_url, next_objective.description)
-                            new_plan = await planner.create_execution_plan_for_objective(
-                                next_objective, screen_analysis, locator, image_url,
-                                all_objective_steps=objective_progress.objective_steps
-                            )
-                            next_objective.execution_plan = new_plan.steps
-                            
-                            print(Fore.GREEN + f"📋 新しい計画を生成: {len(new_plan.steps)}ステップ")
-                            
-                            # 進捗追跡を更新
-                            execution_progress["progress"] = ExecutionProgress(original_plan=new_plan.steps)
-                            tool_callback.set_execution_progress(execution_progress["progress"])
-                            
-                            elapsed = time.time() - start_time
-                            allure.attach(
-                                f"{elapsed:.3f} seconds",
-                                name="⏱️ Replan Step Time",
-                                attachment_type=allure.attachment_type.TEXT,
-                            )
-                            
-                            # 注意: past_stepsはAnnotated[List, operator.add]なので空リストを返しても追記される
-                            # 新しい目標の計画を返す（past_stepsは累積される仕様）
-                            return {
-                                "plan": new_plan.steps,
-                                "replan_count": current_replan_count + 1,
-                            }
-                        else:
-                            # 全目標達成！Responseを生成して終了
-                            print(Fore.GREEN + f"🎉 全目標ステップ達成！テスト完了です。")
-                            
-                            # 完了レスポンスを生成
-                            completed_objectives = [
-                                f"✅ [{s.index}] {s.description}" 
-                                for s in objective_progress.objective_steps 
-                                if s.status == "completed"
-                            ]
-                            
-                            final_response = f"""## テスト完了
-
-全ての目標ステップが達成されました。
-
-【達成した目標】
-{chr(10).join(completed_objectives)}
-
-{RESULT_PASS}"""
-                            
-                            elapsed = time.time() - start_time
-                            allure.attach(
-                                f"{elapsed:.3f} seconds",
-                                name="⏱️ Replan Step Time",
-                                attachment_type=allure.attachment_type.TEXT,
-                            )
-                            
-                            return {
-                                "response": final_response,
-                                "replan_count": current_replan_count + 1,
-                            }
 
                 if isinstance(replan_result.action, Response):
                     allure.attach(

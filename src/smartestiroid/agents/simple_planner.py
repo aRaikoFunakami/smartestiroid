@@ -146,14 +146,16 @@ class SimplePlanner:
 2. **ステップ数は元の数に合わせる**
    - 入力に2ステップあれば、出力も2ステップ
    - 「1. ○○ 2. ○○」なら2ステップ
-   - 番号がない連続した文なら1ステップ
+   - 番号がない連続した文でも、複数の操作があれば分割する
 
 3. **確認項目・期待結果は除外**
    - 「〇〇が表示されること」「〇〇であること」等は除外
 
-4. **表現の変換はOK**
-   - 「〇〇する」→「〇〇している」への変換は許可
-   - 例: 「Wi-FiをONにする」→「Wi-FiがONになっている」
+4. **★重要★ ステップは「指示形」で書く**
+   - ステップはLLMへの指示であり、結果の確認ではない
+   - 「〇〇する」「〇〇を開く」「〇〇をONにする」のように動作指示形にすること
+   - ❌NG: 「設定画面が開いている」「Wi-FiがONになっている」（これは結果確認）
+   - ✅OK: 「設定画面を開く」「Wi-FiをONにする」（これは動作指示）
 
 【出力例】
 入力: "1. アプリを起動する 2. 利用規約ダイアログを確認する"
@@ -161,12 +163,12 @@ class SimplePlanner:
 （※ 2ステップのまま。詳細化しない）
 
 入力: "設定画面を開いてWi-FiをONにする"
-出力: ["設定画面が開いている", "Wi-FiがONになっている"]
-（※ 1文に2つの操作があるので2ステップ。意味は変えずに表現を変換）
+出力: ["設定画面を開く", "Wi-FiをONにする"]
+（※ 1文に2つの操作があるので2ステップ。動作指示形で書く）
 
 入力: "1. Chromeを起動 2. yahoo.co.jpに移動 確認項目: ページが表示されること"
 出力: ["Chromeを起動する", "yahoo.co.jpに移動する"]
-（※ 確認項目は除外）
+（※ 確認項目は除外、動作指示形で書く）
 """
         
         try:
@@ -480,7 +482,18 @@ class SimplePlanner:
             
             print(Fore.CYAN + "🔀 Multi-stage replan: STAGE 3（Output Generation）")
             if decision == "RESPONSE":
+                # RESPONSE判定 = テスト終了（成功または失敗）
+                # ここで初めて目標達成を確定させる
                 print(Fore.CYAN + "  → RESPONSE分岐に入りました。build_response()を呼び出します...")
+                
+                # 目標進捗を更新（RESPONSEが返される = 現在の目標が達成または終了）
+                if state_analysis.current_objective_achieved and objective_progress:
+                    current_step = objective_progress.get_current_step()
+                    if current_step and current_step.status != "completed":
+                        evidence = state_analysis.current_objective_evidence or "状態分析により達成確認"
+                        print(Fore.GREEN + f"✅ [Planner] 目標ステップ完了: [{current_step.index}] {current_step.description[:50]}...")
+                        objective_progress.mark_current_completed(evidence=evidence)
+                
                 try:
                     response = await self.replanner.build_response(
                         goal=state["input"],
@@ -505,6 +518,24 @@ class SimplePlanner:
                     allure.attach(f"build_response error: {build_err}", name="❌ build_response Error", attachment_type=allure.attachment_type.TEXT)
                     raise
             else:
+                # PLAN判定 = まだ継続が必要
+                # 現在の目標ステップが達成されている場合は次の目標に進む
+                if state_analysis.current_objective_achieved and objective_progress:
+                    current_step = objective_progress.get_current_step()
+                    if current_step and current_step.status != "completed":
+                        evidence = state_analysis.current_objective_evidence or "状態分析により達成確認"
+                        print(Fore.GREEN + f"✅ [Planner] 目標ステップ完了: [{current_step.index}] {current_step.description[:50]}...")
+                        objective_progress.mark_current_completed(evidence=evidence)
+                        
+                        # 次の目標に進む
+                        has_next = objective_progress.advance_to_next_objective()
+                        if has_next:
+                            next_objective = objective_progress.get_current_step()
+                            print(Fore.CYAN + f"🎯 [Planner] 次の目標ステップに進みます: [{next_objective.index}] {next_objective.description[:50]}...")
+                        # has_next=False の場合でも、decide_action() が PLAN を返したので計画を作成する
+                        # （LLM の判断を尊重）
+                
+                # 現在の目標（または次の目標）に対する計画を作成
                 plan = await self.replanner.build_plan(
                     goal=state["input"],
                     original_plan=state["plan"],
