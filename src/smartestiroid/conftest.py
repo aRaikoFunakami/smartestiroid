@@ -474,9 +474,21 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             generate_locators = tools_dict.get("get_page_source")
             activate_app = tools_dict.get("activate_app")
             terminate_app = tools_dict.get("terminate_app")
+            
+            # appPackage情報をknowhowに追加（LLMがテスト対象アプリを認識できるようにする）
+            app_package = capabilities.get("appium:appPackage")
+            if app_package:
+                app_package_info = f"""
+テスト対象アプリ情報:
+* テスト対象アプリのパッケージID: {app_package}
+* activate_app や terminate_app を使用する際は、このパッケージIDを使用してください
+* 別のアプリを起動する必要がある場合を除き、このアプリを操作してください
+"""
+                knowhow = app_package_info + "\n" + knowhow
+                print(Fore.CYAN + f"テスト対象アプリ: {app_package} (knowhowに追加済み)")
+            
             # noReset=True の場合、appPackageで指定されたアプリを強制起動
             if no_reset:
-                app_package = capabilities.get("appium:appPackage")
                 if app_package:
                     print(Fore.CYAN + f"noReset=True: アプリを強制起動します (appPackage={app_package})")
                     try:
