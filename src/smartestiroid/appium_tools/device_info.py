@@ -1,6 +1,7 @@
 """Device information tools for Appium."""
 
 import logging
+import time
 from langchain.tools import tool
 from selenium.common.exceptions import InvalidSessionIdException
 
@@ -21,6 +22,9 @@ def get_device_info() -> str:
     from .session import driver
     if not driver:
         raise ValueError("Driver is not initialized")
+    
+    # Wait 1 second to avoid ADB resource conflicts
+    time.sleep(1)
     
     try:
         def shell(cmd, *args):

@@ -1,6 +1,9 @@
 """Navigation and screen inspection tools for Appium."""
 
+import base64
 import logging
+import os
+import tempfile
 import time
 from langchain.tools import tool
 from selenium.common.exceptions import InvalidSessionIdException
@@ -9,6 +12,37 @@ from .interaction import _find_element_internal
 from .xml_compressor import compress_xml
 
 logger = logging.getLogger(__name__)
+
+# スクリーンショット保存先のパス（環境変数で設定可能）
+SCREENSHOT_PATH = os.getenv("SMARTESTIROID_SCREENSHOT_PATH", "/app/data/latest_screenshot.png")
+
+
+def _save_screenshot_to_file(screenshot_base64: str) -> None:
+    """スクリーンショットをファイルに保存する（UI表示用）
+    
+    アトミックな書き込みを行い、読み込み側が不完全なファイルを取得しないようにする。
+    一時ファイルに書き込んでから rename することで、ファイルの置き換えをアトミックに行う。
+    """
+    try:
+        screenshot_data = base64.b64decode(screenshot_base64)
+        
+        # 一時ファイルに書き込み（同じディレクトリに作成してrenameがアトミックになるようにする）
+        dir_path = os.path.dirname(SCREENSHOT_PATH)
+        with tempfile.NamedTemporaryFile(mode='wb', dir=dir_path, delete=False, suffix='.tmp') as f:
+            f.write(screenshot_data)
+            temp_path = f.name
+        
+        # アトミックにファイルを置き換え
+        os.replace(temp_path, SCREENSHOT_PATH)
+        logger.debug(f"Screenshot saved to {SCREENSHOT_PATH}")
+    except Exception as e:
+        logger.warning(f"Failed to save screenshot to file: {e}")
+        # 一時ファイルが残っていたら削除
+        try:
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                os.unlink(temp_path)
+        except Exception:
+            pass
 
 
 @tool
@@ -28,6 +62,8 @@ def take_screenshot() -> str:
     
     try:
         screenshot_base64 = driver.get_screenshot_as_base64()
+        # UI表示用にファイルにも保存
+        _save_screenshot_to_file(screenshot_base64)
         logger.info("🔧 Screenshot taken successfully")
         return screenshot_base64
     except InvalidSessionIdException:
