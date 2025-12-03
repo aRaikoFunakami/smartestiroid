@@ -178,6 +178,10 @@ def press_keycode(keycode: int) -> str:
         ValueError: If driver is not initialized
         InvalidSessionIdException: If Appium session has expired
     """
+    # 並列呼び出し時に正しい順序で実行されるようにウェイトを入れる
+    # click_element (0s) -> send_keys (1s) -> press_keycode (2s) の順で実行される
+    time.sleep(2)
+    
     from .session import driver
     if not driver:
         raise ValueError("Driver is not initialized")
@@ -246,6 +250,10 @@ def send_keys(by: str, value: str, text: str) -> str:
         ValueError: If driver is not initialized
         InvalidSessionIdException: If Appium session has expired
     """
+    # 並列呼び出し時に正しい順序で実行されるようにウェイトを入れる
+    # click_element (0s) -> send_keys (1s) -> press_keycode (2s) の順で実行される
+    time.sleep(1)
+    
     element, error = _find_element_internal(by, value)
     if error:
         return error

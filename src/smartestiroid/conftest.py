@@ -519,7 +519,15 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                 max_retries=OPENAI_MAX_RETRIES,
                 callbacks=[token_callback]
             )
-            prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。\n{knowhow}\n"""
+            prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。
+
+【重要】ツール呼び出しのルール:
+- ツールは必ず1つずつ順番に呼び出すこと（並列呼び出し禁止）
+- 1つのツールの結果を確認してから次のツールを呼び出すこと
+- 例: send_keys → 結果確認 → press_keycode の順で実行
+
+{knowhow}
+"""
 
             agent_executor = create_agent(llm, appium_tools(), system_prompt=prompt)
             print(Fore.CYAN + f"Agent Executor用モデル: {cfg.execution_model}")

@@ -1,6 +1,7 @@
 """App management tools for Appium."""
 
 import logging
+import time
 from langchain.tools import tool
 from selenium.common.exceptions import InvalidSessionIdException
 
@@ -26,6 +27,7 @@ def get_current_app() -> str:
         current_package = driver.current_package
         current_activity = driver.current_activity
         logger.info(f"🔧 Current app: {current_package}/{current_activity}")
+        time.sleep(1)  # ツール実行後のウェイト
         return f"Current app package: {current_package}\nCurrent activity: {current_activity}"
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
@@ -53,6 +55,7 @@ def activate_app(app_id: str) -> str:
     try:
         driver.activate_app(app_id)
         logger.info(f"🔧 Activated app: {app_id}")
+        time.sleep(1)  # ツール実行後のウェイト
         return f"Successfully activated app: {app_id}"
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
@@ -80,6 +83,7 @@ def terminate_app(app_id: str) -> str:
     try:
         result = driver.terminate_app(app_id)
         logger.info(f"🔧 Terminated app: {app_id}, result: {result}")
+        time.sleep(1)  # ツール実行後のウェイト
         return f"Successfully terminated app: {app_id} (result: {result})"
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
@@ -117,6 +121,7 @@ def list_apps() -> str:
         package_list = [line.replace("package:", "") for line in packages.split("\n") if line.startswith("package:")]
         logger.info(f"🔧 Found {len(package_list)} installed apps")
         logger.debug(f"🔧 Installed apps: {package_list}")
+        time.sleep(1)  # ツール実行後のウェイト
         return f"Installed apps ({len(package_list)}):\n" + "\n".join(package_list)
     except InvalidSessionIdException:
         # Session expired - re-raise to caller

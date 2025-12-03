@@ -65,6 +65,7 @@ def take_screenshot() -> str:
         # UI表示用にファイルにも保存
         _save_screenshot_to_file(screenshot_base64)
         logger.info("🔧 Screenshot taken successfully")
+        time.sleep(1)  # ツール実行後のウェイト
         return screenshot_base64
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
@@ -140,6 +141,7 @@ def get_page_source() -> str:
         compressed_source = compress_xml(source)
         logger.info("🔧 Page source retrieved and compressed successfully")  
         logger.debug(f"\n{compressed_source}\n")     
+        time.sleep(1)  # ツール実行後のウェイト
         return f"Page source retrieved successfully:\n{compressed_source}"
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
@@ -209,6 +211,7 @@ def scroll_element(by: str, value: str, direction: str = "up") -> str:
             # Perform swipe
             driver.swipe(int(start_x), int(start_y), int(end_x), int(end_y), 500)
             logger.info(f"🔧 Scrolled {direction} in element found by {by} with value {value}")
+            time.sleep(1)  # ツール実行後のウェイト
             return f"Successfully scrolled {direction} in element"
             
         except StaleElementReferenceException as e:
@@ -253,9 +256,11 @@ def scroll_to_element(by: str, value: str, scrollable_by: str = "xpath", scrolla
             if element and element.is_displayed():
                 if scroll_count == 0:
                     logger.info(f"🔧 Found element by {by} with value {value} (already visible, no scroll needed)")
+                    time.sleep(1)  # ツール実行後のウェイト
                     return f"Element already visible by {by} with value {value} (no scroll needed)"
                 else:
                     logger.info(f"🔧 Found element by {by} with value {value} after {scroll_count} scroll(s), total distance: {total_scroll_distance}px")
+                    time.sleep(1)  # ツール実行後のウェイト
                     return f"Successfully scrolled to element by {by} with value {value} after {scroll_count} scroll(s), total scroll distance: {total_scroll_distance}px"
         except StaleElementReferenceException:
             # 要素がstaleになった場合は次のスクロールへ

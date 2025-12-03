@@ -67,6 +67,7 @@ def get_device_info() -> str:
 
         
         print(f"🔧 Retrieved device information: {output}")
+        time.sleep(1)  # ツール実行後のウェイト
         return output
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
@@ -91,6 +92,7 @@ def is_locked() -> str:
     try:
         locked = driver.is_locked()
         logger.info(f"🔧 Device locked status: {locked}")
+        time.sleep(1)  # ツール実行後のウェイト
         return f"Device is {'locked' if locked else 'unlocked'}"
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
@@ -115,6 +117,7 @@ def get_orientation() -> str:
     try:
         orientation = driver.orientation
         logger.info(f"🔧 Current orientation: {orientation}")
+        time.sleep(1)  # ツール実行後のウェイト
         return f"Current orientation: {orientation}"
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
@@ -145,6 +148,7 @@ def set_orientation(orientation: str) -> str:
     try:
         driver.orientation = orientation.upper()
         logger.info(f"🔧 Set orientation to: {orientation}")
+        time.sleep(1)  # ツール実行後のウェイト
         return f"Successfully set orientation to: {orientation}"
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
