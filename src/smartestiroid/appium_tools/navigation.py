@@ -6,9 +6,9 @@ import os
 import tempfile
 import time
 from langchain.tools import tool
-from selenium.common.exceptions import InvalidSessionIdException
+from selenium.common.exceptions import InvalidSessionIdException, StaleElementReferenceException
 
-from .interaction import _find_element_internal
+from .interaction import _find_element_internal, STALE_ELEMENT_RETRY_COUNT, STALE_ELEMENT_RETRY_DELAY
 from .xml_compressor import compress_xml
 
 logger = logging.getLogger(__name__)
@@ -168,46 +168,59 @@ def scroll_element(by: str, value: str, direction: str = "up") -> str:
     """
     from .session import driver
     
-    element, error = _find_element_internal(by, value)
-    if error:
-        return error
+    for attempt in range(STALE_ELEMENT_RETRY_COUNT):
+        element, error = _find_element_internal(by, value)
+        if error:
+            return error
+        
+        try:
+            # Get element location and size
+            location = element.location
+            size = element.size
+            
+            # Calculate center point
+            center_x = location['x'] + size['width'] // 2
+            center_y = location['y'] + size['height'] // 2
+            
+            # Calculate swipe coordinates within the element
+            if direction == "up":
+                start_x = center_x
+                start_y = location['y'] + size['height'] * 0.8
+                end_x = center_x
+                end_y = location['y'] + size['height'] * 0.2
+            elif direction == "down":
+                start_x = center_x
+                start_y = location['y'] + size['height'] * 0.2
+                end_x = center_x
+                end_y = location['y'] + size['height'] * 0.8
+            elif direction == "left":
+                start_x = location['x'] + size['width'] * 0.8
+                start_y = center_y
+                end_x = location['x'] + size['width'] * 0.2
+                end_y = center_y
+            elif direction == "right":
+                start_x = location['x'] + size['width'] * 0.2
+                start_y = center_y
+                end_x = location['x'] + size['width'] * 0.8
+                end_y = center_y
+            else:
+                return f"❌ Invalid direction: '{direction}'. Use 'up', 'down', 'left', or 'right'"
+            
+            # Perform swipe
+            driver.swipe(int(start_x), int(start_y), int(end_x), int(end_y), 500)
+            logger.info(f"🔧 Scrolled {direction} in element found by {by} with value {value}")
+            return f"Successfully scrolled {direction} in element"
+            
+        except StaleElementReferenceException as e:
+            logger.warning(f"⚠️ StaleElementReferenceException in scroll_element (attempt {attempt + 1}/{STALE_ELEMENT_RETRY_COUNT}): {e}")
+            if attempt < STALE_ELEMENT_RETRY_COUNT - 1:
+                time.sleep(STALE_ELEMENT_RETRY_DELAY)
+                continue
     
-    # Get element location and size
-    location = element.location
-    size = element.size
-    
-    # Calculate center point
-    center_x = location['x'] + size['width'] // 2
-    center_y = location['y'] + size['height'] // 2
-    
-    # Calculate swipe coordinates within the element
-    if direction == "up":
-        start_x = center_x
-        start_y = location['y'] + size['height'] * 0.8
-        end_x = center_x
-        end_y = location['y'] + size['height'] * 0.2
-    elif direction == "down":
-        start_x = center_x
-        start_y = location['y'] + size['height'] * 0.2
-        end_x = center_x
-        end_y = location['y'] + size['height'] * 0.8
-    elif direction == "left":
-        start_x = location['x'] + size['width'] * 0.8
-        start_y = center_y
-        end_x = location['x'] + size['width'] * 0.2
-        end_y = center_y
-    elif direction == "right":
-        start_x = location['x'] + size['width'] * 0.2
-        start_y = center_y
-        end_x = location['x'] + size['width'] * 0.8
-        end_y = center_y
-    else:
-        return f"❌ Invalid direction: '{direction}'. Use 'up', 'down', 'left', or 'right'"
-    
-    # Perform swipe
-    driver.swipe(int(start_x), int(start_y), int(end_x), int(end_y), 500)
-    logger.info(f"🔧 Scrolled {direction} in element found by {by} with value {value}")
-    return f"Successfully scrolled {direction} in element"
+    # 全リトライ失敗
+    error_msg = f"❌ Element became stale after {STALE_ELEMENT_RETRY_COUNT} attempts. The scrollable element '{value}' disappeared from DOM. Use get_page_source() to check the current screen state."
+    logger.error(error_msg)
+    return error_msg
 
 
 @tool
@@ -236,31 +249,46 @@ def scroll_to_element(by: str, value: str, scrollable_by: str = "xpath", scrolla
     for i in range(max_scrolls):
         # Try to find the target element
         element, error = _find_element_internal(by, value)
-        if element and element.is_displayed():
-            if scroll_count == 0:
-                logger.info(f"🔧 Found element by {by} with value {value} (already visible, no scroll needed)")
-                return f"Element already visible by {by} with value {value} (no scroll needed)"
-            else:
-                logger.info(f"🔧 Found element by {by} with value {value} after {scroll_count} scroll(s), total distance: {total_scroll_distance}px")
-                return f"Successfully scrolled to element by {by} with value {value} after {scroll_count} scroll(s), total scroll distance: {total_scroll_distance}px"
+        try:
+            if element and element.is_displayed():
+                if scroll_count == 0:
+                    logger.info(f"🔧 Found element by {by} with value {value} (already visible, no scroll needed)")
+                    return f"Element already visible by {by} with value {value} (no scroll needed)"
+                else:
+                    logger.info(f"🔧 Found element by {by} with value {value} after {scroll_count} scroll(s), total distance: {total_scroll_distance}px")
+                    return f"Successfully scrolled to element by {by} with value {value} after {scroll_count} scroll(s), total scroll distance: {total_scroll_distance}px"
+        except StaleElementReferenceException:
+            # 要素がstaleになった場合は次のスクロールへ
+            logger.warning(f"⚠️ Target element became stale, continuing scroll...")
         
         # If it's a locator error (not just "not found"), return immediately
         if error and "Invalid locator" in error:
             return error
         
-        # Find scrollable container and scroll down
-        scrollable, scroll_error = _find_element_internal(scrollable_by, scrollable_value)
-        if scroll_error:
-            return scroll_error
-        
-        location = scrollable.location
-        size = scrollable.size
-        center_x = location['x'] + size['width'] // 2
-        start_y = location['y'] + size['height'] * 0.8
-        end_y = location['y'] + size['height'] * 0.2
-        scroll_distance = int(start_y - end_y)
-        total_scroll_distance += scroll_distance
-        driver.swipe(int(center_x), int(start_y), int(center_x), int(end_y), 500)
-        scroll_count += 1
+        # Find scrollable container and scroll down with retry
+        for attempt in range(STALE_ELEMENT_RETRY_COUNT):
+            scrollable, scroll_error = _find_element_internal(scrollable_by, scrollable_value)
+            if scroll_error:
+                return scroll_error
+            
+            try:
+                location = scrollable.location
+                size = scrollable.size
+                center_x = location['x'] + size['width'] // 2
+                start_y = location['y'] + size['height'] * 0.8
+                end_y = location['y'] + size['height'] * 0.2
+                scroll_distance = int(start_y - end_y)
+                total_scroll_distance += scroll_distance
+                driver.swipe(int(center_x), int(start_y), int(center_x), int(end_y), 500)
+                scroll_count += 1
+                break  # スワイプ成功
+            except StaleElementReferenceException as e:
+                logger.warning(f"⚠️ StaleElementReferenceException in scroll_to_element (attempt {attempt + 1}/{STALE_ELEMENT_RETRY_COUNT}): {e}")
+                if attempt < STALE_ELEMENT_RETRY_COUNT - 1:
+                    time.sleep(STALE_ELEMENT_RETRY_DELAY)
+                    continue
+                else:
+                    # 全リトライ失敗
+                    return f"❌ Scrollable element became stale after {STALE_ELEMENT_RETRY_COUNT} attempts. Use get_page_source() to check the current screen state."
     
     return f"❌ Element not found after scrolling: No element found with by='{by}' and value='{value}' after {scroll_count} scrolls (total scroll distance: {total_scroll_distance}px). IMPORTANT: Use get_page_source() to verify the element exists and check its exact identifiers."

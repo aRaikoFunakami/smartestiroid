@@ -131,24 +131,42 @@ class SimplePlanner:
         Returns:
             ObjectiveProgress: 目標進捗管理オブジェクト
         """
-        prompt = f"""以下のテスト目標から、個別の検証ステップを抽出してください。
+        prompt = f"""以下のテスト目標からステップを抽出してください。
 
 【テスト目標】
 {user_input}
 
-【指示】
-- 目標を達成するために確認すべき個別ステップを抽出する
-- 各ステップは「何が達成されるべきか」という目標レベルで記述
-- 具体的なUI操作ではなく、期待される状態や結果を記述
-- 順序を保持すること
-- 1つのステップは1つの検証可能な目標に対応すること
+【絶対に守るべきルール】
+
+1. **ステップの意味を変えない**
+   - ユーザーの意図を正確に反映すること
+   - 勝手に操作を追加しない（スクロール、ボタンタップなど）
+   - 勝手にステップを詳細化・分解しない
+
+2. **ステップ数は元の数に合わせる**
+   - 入力に2ステップあれば、出力も2ステップ
+   - 「1. ○○ 2. ○○」なら2ステップ
+   - 番号がない連続した文なら1ステップ
+
+3. **確認項目・期待結果は除外**
+   - 「〇〇が表示されること」「〇〇であること」等は除外
+
+4. **表現の変換はOK**
+   - 「〇〇する」→「〇〇している」への変換は許可
+   - 例: 「Wi-FiをONにする」→「Wi-FiがONになっている」
 
 【出力例】
-入力: "1. Chromeを起動 2. yahoo.co.jpに移動 3. 星マークをクリック"
-出力: ["Chromeが起動している", "yahoo.co.jpに移動している", "星マークがクリックされている"]
+入力: "1. アプリを起動する 2. 利用規約ダイアログを確認する"
+出力: ["アプリを起動する", "利用規約ダイアログを確認する"]
+（※ 2ステップのまま。詳細化しない）
 
 入力: "設定画面を開いてWi-FiをONにする"
 出力: ["設定画面が開いている", "Wi-FiがONになっている"]
+（※ 1文に2つの操作があるので2ステップ。意味は変えずに表現を変換）
+
+入力: "1. Chromeを起動 2. yahoo.co.jpに移動 確認項目: ページが表示されること"
+出力: ["Chromeを起動する", "yahoo.co.jpに移動する"]
+（※ 確認項目は除外）
 """
         
         try:
@@ -206,8 +224,9 @@ class SimplePlanner:
         objective_step: ObjectiveStep,
         screen_analysis: ScreenAnalysis,
         locator: str = "",
-        image_url: str = ""
-    ) -> list[str]:
+        image_url: str = "",
+        all_objective_steps: list = None  # 未使用だが互換性のため残す
+    ) -> Plan:
         """特定のObjectiveStepに対するExecution Planを生成する
         
         Args:
@@ -215,48 +234,27 @@ class SimplePlanner:
             screen_analysis: 現在の画面分析結果
             locator: 画面のロケーター情報
             image_url: 画面のスクリーンショット
+            all_objective_steps: 未使用（互換性のため残す）
             
         Returns:
-            list[str]: 実行計画（アクションのリスト）
+            Plan: 実行計画
         """
-        # ブロッキングダイアログがある場合は先にそれを処理するステップを含める
-        blocking_context = ""
-        if screen_analysis.blocking_dialogs:
-            blocking_context = f"""
-【重要】画面上に障害物があります:
-{screen_analysis.blocking_dialogs}
+        prompt = f"""目標を達成するための実行計画を1ステップで作成してください。
 
-まずこの障害物を閉じるアクションを最初に含めてください。
-"""
-
-        prompt = f"""以下の目標ステップを達成するための実行計画を作成してください。
-
-【達成すべき目標】
+【目標】
 {objective_step.description}
 
-【現在の画面状態】
-- 画面タイプ: {screen_analysis.screen_type}
-- 主要要素: {screen_analysis.main_elements}
-- 現在の状態: {screen_analysis.current_state}
-- 実行可能なアクション: {screen_analysis.available_actions}
-{blocking_context}
+【画面状態】
+{screen_analysis.screen_type} 
 
-【ロケーター情報】
-{locator[:3000] if locator else "なし"}
+【現在の画面状態の要約】
+{screen_analysis.current_state}
 
-【ノウハウ】
-{self.knowhow}
-
-【指示】
-- 目標を達成するために必要な具体的なアクションを列挙
-- 各アクションはAppiumツールで実行可能な単位
-- 不要なステップは含めない
-- 画面状態を考慮して最適なアクション順序を決定
-- 関連する連続操作は1つのステップにまとめること
-
-【禁止事項】
-- アカウント作成
-- 自動ログイン
+【厳格ルール】
+- 目標の意味を変えない、拡大解釈しない
+- 「確認する」が目標なら確認のみ（操作は不要）
+- 「起動する」が目標で既に起動済みなら「起動済みを確認」のみ
+- 勝手にアクションを追加しない
 """
 
         messages = [HumanMessage(content=prompt)]
@@ -278,12 +276,12 @@ class SimplePlanner:
             for i, step in enumerate(plan.steps):
                 print(Fore.CYAN + f"  [{i}] {step}")
             
-            return plan.steps
+            return plan
             
         except Exception as e:
             err_type = type(e).__name__
             print(Fore.RED + f"[create_execution_plan_for_objective] Exception: {err_type}: {e}")
-            return [f"目標「{objective_step.description}」を達成するアクションを実行"]
+            return Plan(steps=[f"目標「{objective_step.description}」を達成する"])
 
     async def evaluate_objective_completion(
         self,
@@ -313,14 +311,24 @@ class SimplePlanner:
 - 主要要素: {screen_analysis.main_elements}
 - 現在の状態: {screen_analysis.current_state}
 
-【ロケーター情報】
-{locator[:3000] if locator else "なし"}
+【重要な判定基準】
+- 「アプリを起動する」目標の場合:
+  - アプリの画面（ダイアログ含む）が表示されていれば「達成」
+  - ダイアログはアプリの一部。ダイアログ表示中でも起動は完了している
+  - ホーム画面に到達する必要はない
 
-【指示】
-- 画面のロケーター情報とスクリーンショットから目標達成を判断
-- 達成/未達成の根拠を明確に示す
-- 部分的な達成は「未達成」として扱う
-- 曖昧な場合は「未達成」として扱う
+- 「〇〇を確認する」目標の場合:
+  - 確認対象が画面に表示されていれば「達成」（表示されていることを確認できた）
+  - 確認対象が画面に表示されていなくても「達成」（表示されていないことを確認できた）
+  - 重要: 「確認する」とは「有無を確認する」こと。表示されていないことも確認の結果
+  - 操作する必要はない
+
+- 「〇〇ダイアログを確認する」目標の場合:
+  - ダイアログが表示されていれば「達成」（表示を確認できた）
+  - ダイアログが表示されていなければ「達成」（非表示を確認できた）
+  - 重要: ダイアログの有無を確認すること自体が目標
+
+- 目標の意味を拡大解釈しない
 """
 
         messages = [HumanMessage(content=prompt)]
@@ -380,7 +388,7 @@ class SimplePlanner:
 - 障害物詳細: {screen_analysis.blocking_dialogs}
 
 【ロケーター情報】
-{locator[:3000] if locator else "なし"}
+{locator if locator else "なし"}
 
 【指示】
 - 障害物（ダイアログ、オーバーレイ等）を閉じるための具体的なアクションを列挙
@@ -412,131 +420,6 @@ class SimplePlanner:
             err_type = type(e).__name__
             print(Fore.RED + f"[create_recovery_plan] Exception: {err_type}: {e}")
             return f"障害物を回避: {blocking_reason[:30]}...", ["障害物を閉じる"]
-
-    async def create_plan(
-        self, user_input: str, locator: str = "", image_url: str = ""
-    ) -> Plan:
-        """目標達成のための計画を作成する（2段階処理）
-        
-        Stage 1: 画面分析（analyze_screen）
-        Stage 2: プランニング（本メソッド）
-        """
-        
-        # Stage 1: 画面分析
-        screen_analysis = None
-        if locator and image_url:
-            print(Fore.CYAN + f"[create_plan] Stage 1: 画面分析開始")
-            screen_analysis = await self.analyze_screen(locator, image_url, user_input)
-            
-            # 分析結果をAllureに添付
-            analysis_text = f"""【画面種類】{screen_analysis.screen_type}
-
-【主要UI要素】
-{screen_analysis.main_elements}
-
-【障害物（ダイアログ等）】
-{screen_analysis.blocking_dialogs or "なし"}
-
-【現在の状態】
-{screen_analysis.current_state}
-
-【実行可能なアクション】
-{screen_analysis.available_actions}
-"""
-            allure.attach(
-                analysis_text,
-                name=f"🔍 Screen Analysis [model: {self.model_name}]",
-                attachment_type=allure.attachment_type.TEXT
-            )
-            print(Fore.CYAN + f"[create_plan] Stage 1 完了")
-        
-        # Stage 2: プランニング
-        print(Fore.CYAN + f"[create_plan] Stage 2: プランニング開始")
-        
-        system_prompt = f"""あなたは効率的なテスト計画を作成するエキスパートです。
-
-【計画作成のルール】
-
-1. ステップの効率化:
-   - 関連する連続操作は1つのステップにまとめる
-   - 例: 「検索ボックスをタップし、'キーワード'を入力して検索ボタンを押す」
-   - NG例: 1.ボックスタップ 2.入力 3.ボタン押下（分割しすぎ）
-
-2. ステップを分割すべきケース:
-   - 画面遷移を伴う場合
-   - 待機が必要な場合
-   - 結果の検証が必要な場合
-
-3. 障害物（ダイアログ等）の処理:
-   - 障害物がある場合は、最初のステップで回避する
-   - 回避方法: 「閉じる」「スキップ」「後で」「許可しない」等をタップ
-
-4. 禁止事項:
-   - アカウント作成は禁止
-   - 自動ログインは禁止
-   - 不要・重複・曖昧なステップは入れない
-
-{self.knowhow}
-"""
-
-        # 画面分析結果がある場合はそれを含める
-        if screen_analysis:
-            human_message = f"""【目標】
-{user_input}
-
-【現在の画面分析結果】
-- 画面種類: {screen_analysis.screen_type}
-- 主要UI要素: {screen_analysis.main_elements}
-- 障害物: {screen_analysis.blocking_dialogs or "なし"}
-- 現在の状態: {screen_analysis.current_state}
-- 実行可能なアクション: {screen_analysis.available_actions}
-
-【指示】
-上記の画面分析結果に基づき、目標達成のための計画を作成してください。
-障害物がある場合は、最初のステップでそれを閉じる操作を含めてください。
-"""
-        else:
-            human_message = f"""【目標】
-{user_input}
-
-【指示】
-目標達成のための計画を作成してください。
-"""
-
-        messages = [SystemMessage(content=system_prompt)]
-        
-        if image_url:
-            messages.append(HumanMessage(content=[
-                {"type": "text", "text": human_message},
-                {"type": "image_url", "image_url": {"url": image_url}}
-            ]))
-        else:
-            messages.append(HumanMessage(content=human_message))
-
-        try:
-            structured_llm = self.llm.with_structured_output(Plan)
-            
-            with self.token_callback.track_query():
-                plan = await structured_llm.ainvoke(messages)
-            
-            print(Fore.CYAN + f"[create_plan] Stage 2 完了: {len(plan.steps)}ステップ")
-            return plan
-        
-        except Exception as e:
-            err_type = type(e).__name__
-            print(Fore.RED + f"[create_plan] Exception: {err_type}: {e}")
-            allure.attach(
-                f"Exception Type: {err_type}\nLocation: SimplePlanner.create_plan\nMessage: {e}",
-                name="❌ create_plan Exception",
-                attachment_type=allure.attachment_type.TEXT
-            )
-            log_openai_error_to_allure(
-                error_type=err_type,
-                location="SimplePlanner.create_plan",
-                model=self.llm.model_name,
-                error=e
-            )
-            raise
 
     async def replan(
         self,
@@ -597,23 +480,45 @@ class SimplePlanner:
             
             print(Fore.CYAN + "🔀 Multi-stage replan: STAGE 3（Output Generation）")
             if decision == "RESPONSE":
-                response = await self.replanner.build_response(
-                    goal=state["input"],
-                    past_steps=state["past_steps"],
-                    state_analysis=state_analysis,
-                    objective_progress=objective_progress
-                )
-                print(Fore.GREEN + f"✅ Response生成完了: [{response.status}] {response.reason[:100]}...")
-                return Act(action=response, state_analysis=state_summary)
+                print(Fore.CYAN + "  → RESPONSE分岐に入りました。build_response()を呼び出します...")
+                try:
+                    response = await self.replanner.build_response(
+                        goal=state["input"],
+                        past_steps=state["past_steps"],
+                        state_analysis=state_analysis,
+                        objective_progress=objective_progress
+                    )
+                    print(Fore.GREEN + f"✅ Response生成完了: [{response.status}] {response.reason[:100]}...")
+                    allure.attach(
+                        f"Status: {response.status}\n\nReason:\n{response.reason}",
+                        name="📋 Build Response Result",
+                        attachment_type=allure.attachment_type.TEXT
+                    )
+                    return Act(
+                        action=response,
+                        state_analysis=state_summary,
+                        current_objective_achieved=state_analysis.current_objective_achieved,
+                        current_objective_evidence=state_analysis.current_objective_evidence
+                    )
+                except Exception as build_err:
+                    print(Fore.RED + f"❌ build_response()でエラー: {build_err}")
+                    allure.attach(f"build_response error: {build_err}", name="❌ build_response Error", attachment_type=allure.attachment_type.TEXT)
+                    raise
             else:
                 plan = await self.replanner.build_plan(
                     goal=state["input"],
                     original_plan=state["plan"],
                     past_steps=state["past_steps"],
-                    state_analysis=state_analysis
+                    state_analysis=state_analysis,
+                    objective_progress=objective_progress
                 )
                 print(Fore.YELLOW + f"📋 Plan生成完了: {len(plan.steps)}ステップ")
-                return Act(action=plan, state_analysis=state_summary)
+                return Act(
+                    action=plan,
+                    state_analysis=state_summary,
+                    current_objective_achieved=state_analysis.current_objective_achieved,
+                    current_objective_evidence=state_analysis.current_objective_evidence
+                )
         
         except Exception as e:
             print(Fore.RED + f"⚠️ Multi-stage replan エラー: {e}")

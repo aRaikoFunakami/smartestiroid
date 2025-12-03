@@ -1,16 +1,22 @@
 """Element interaction tools for Appium."""
 
 import logging
+import time
 from typing import Tuple, Optional, Any
 from langchain.tools import tool
 from selenium.common.exceptions import (
     InvalidSessionIdException,
     InvalidArgumentException,
     InvalidSelectorException,
-    NoSuchElementException
+    NoSuchElementException,
+    StaleElementReferenceException
 )
 
 logger = logging.getLogger(__name__)
+
+# リトライ設定
+STALE_ELEMENT_RETRY_COUNT = 3
+STALE_ELEMENT_RETRY_DELAY = 0.5  # 秒
 
 
 def _find_element_internal(by: str, value: str) -> Tuple[Optional[Any], Optional[str]]:
@@ -87,13 +93,29 @@ def click_element(by: str, value: str) -> str:
         ValueError: If driver is not initialized
         InvalidSessionIdException: If Appium session has expired
     """
-    element, error = _find_element_internal(by, value)
-    if error:
-        return error
+    last_error = None
     
-    element.click()
-    logger.info(f"🔧 Clicked element by {by} with value {value}")
-    return f"Successfully clicked on element by {by} with value {value}"
+    for attempt in range(STALE_ELEMENT_RETRY_COUNT):
+        element, error = _find_element_internal(by, value)
+        if error:
+            return error
+        
+        try:
+            element.click()
+            logger.info(f"🔧 Clicked element by {by} with value {value}")
+            return f"Successfully clicked on element by {by} with value {value}"
+        except StaleElementReferenceException as e:
+            last_error = e
+            logger.warning(f"⚠️ StaleElementReferenceException (attempt {attempt + 1}/{STALE_ELEMENT_RETRY_COUNT}): {e}")
+            if attempt < STALE_ELEMENT_RETRY_COUNT - 1:
+                time.sleep(STALE_ELEMENT_RETRY_DELAY)
+                # リトライ前に要素を再検索する（ループの先頭で行われる）
+                continue
+    
+    # 全リトライ失敗
+    error_msg = f"❌ Element became stale after {STALE_ELEMENT_RETRY_COUNT} attempts. The element '{value}' was found but disappeared from DOM before click. This usually means the screen changed. Use get_page_source() to check the current screen state."
+    logger.error(error_msg)
+    return error_msg
 
 
 @tool
@@ -111,13 +133,28 @@ def get_text(by: str, value: str) -> str:
         ValueError: If driver is not initialized
         InvalidSessionIdException: If Appium session has expired
     """
-    element, error = _find_element_internal(by, value)
-    if error:
-        return error
+    last_error = None
     
-    text = element.text
-    logger.info(f"🔧 Got text '{text}' from element by {by} with value {value}")
-    return f"Element text: {text}"
+    for attempt in range(STALE_ELEMENT_RETRY_COUNT):
+        element, error = _find_element_internal(by, value)
+        if error:
+            return error
+        
+        try:
+            text = element.text
+            logger.info(f"🔧 Got text '{text}' from element by {by} with value {value}")
+            return f"Element text: {text}"
+        except StaleElementReferenceException as e:
+            last_error = e
+            logger.warning(f"⚠️ StaleElementReferenceException (attempt {attempt + 1}/{STALE_ELEMENT_RETRY_COUNT}): {e}")
+            if attempt < STALE_ELEMENT_RETRY_COUNT - 1:
+                time.sleep(STALE_ELEMENT_RETRY_DELAY)
+                continue
+    
+    # 全リトライ失敗
+    error_msg = f"❌ Element became stale after {STALE_ELEMENT_RETRY_COUNT} attempts. The element '{value}' was found but disappeared from DOM before getting text. Use get_page_source() to check the current screen state."
+    logger.error(error_msg)
+    return error_msg
 
 
 @tool

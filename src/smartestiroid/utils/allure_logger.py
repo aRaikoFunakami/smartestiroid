@@ -12,7 +12,7 @@ from colorama import Fore
 from langchain_core.callbacks import BaseCallbackHandler
 
 from ..config import OPENAI_TIMEOUT
-from ..models import ToolCallRecord, StepExecutionRecord, ExecutionProgress
+from ..models import ToolCallRecord, StepExecutionRecord, ExecutionProgress, ObjectiveProgress
 
 
 class AllureToolCallbackHandler(BaseCallbackHandler):
@@ -28,11 +28,16 @@ class AllureToolCallbackHandler(BaseCallbackHandler):
         self.current_step = None
         # 進捗追跡用
         self._execution_progress: Optional[ExecutionProgress] = None
+        self._objective_progress: Optional[ObjectiveProgress] = None
         self._current_step_record: Optional[StepExecutionRecord] = None
     
     def set_execution_progress(self, progress: ExecutionProgress) -> None:
         """進捗追跡オブジェクトを設定"""
         self._execution_progress = progress
+    
+    def set_objective_progress(self, progress: ObjectiveProgress) -> None:
+        """目標進捗追跡オブジェクトを設定"""
+        self._objective_progress = progress
     
     def start_step(self, step_index: int, step_text: str) -> StepExecutionRecord:
         """新しいステップの実行を開始"""
@@ -59,10 +64,27 @@ class AllureToolCallbackHandler(BaseCallbackHandler):
             self._current_step_record = None
     
     def get_progress_summary(self) -> str:
-        """現在の進捗サマリーを取得"""
+        """現在の進捗サマリーを取得
+        
+        ObjectiveProgress（目標進捗）を優先して表示する。
+        ExecutionProgress（実行計画進捗）は補足情報として表示。
+        """
+        lines = []
+        
+        # 目標進捗（ObjectiveProgress）を優先表示
+        if self._objective_progress:
+            lines.append(self._objective_progress.get_progress_summary())
+            lines.append("")
+        
+        # 実行計画進捗（ExecutionProgress）を補足表示
         if self._execution_progress:
-            return self._execution_progress.get_progress_summary()
-        return "進捗情報なし"
+            completed = self._execution_progress.get_completed_count()
+            total = len(self._execution_progress.original_plan)
+            tool_calls = self._execution_progress.get_total_tool_calls()
+            lines.append(f"【LLM実行計画】 {completed}/{total} ステップ完了")
+            lines.append(f"【ツール呼び出し】 合計{tool_calls}回")
+        
+        return "\n".join(lines) if lines else "進捗情報なし"
     
     def on_tool_start(self, serialized: Dict[str, Any], input_str: str, **kwargs) -> None:
         """ツール呼び出し開始時"""
@@ -159,6 +181,7 @@ class AllureToolCallbackHandler(BaseCallbackHandler):
     def reset_progress(self):
         """進捗追跡をリセット（新しいテストケース開始時に呼び出す）"""
         self._execution_progress = None
+        self._objective_progress = None
         self._current_step_record = None
         self.tool_calls = []
 

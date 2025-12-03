@@ -59,6 +59,8 @@ class Act(BaseModel):
     Attributes:
         action: Either a Response (to answer user) or Plan (to execute more steps)
         state_analysis: Optional state analysis result from replanner
+        current_objective_achieved: Whether current objective step was achieved
+        current_objective_evidence: Evidence for objective achievement/non-achievement
     """
     action: Union[Response, Plan] = Field(
         description="実行するアクション。ユーザーに応答する場合はResponse、さらにツールを使用してタスクを実行する場合はPlanを使用してください。"
@@ -66,6 +68,14 @@ class Act(BaseModel):
     state_analysis: Optional[str] = Field(
         default=None,
         description="リプランナーによる状態分析結果"
+    )
+    current_objective_achieved: bool = Field(
+        default=False,
+        description="現在の目標ステップが達成されたかどうか"
+    )
+    current_objective_evidence: Optional[str] = Field(
+        default=None,
+        description="目標ステップの達成/未達成の根拠"
     )
 
 
@@ -257,6 +267,10 @@ class ObjectiveStep(BaseModel):
         default=None,
         description="完了時: 達成の根拠（画面要素やロケーター情報）"
     )
+    result: Optional["ObjectiveStepResult"] = Field(
+        default=None,
+        description="目標達成評価結果"
+    )
 
 
 class ObjectiveStepResult(BaseModel):
@@ -392,6 +406,21 @@ class ObjectiveProgress(BaseModel):
             current.status = "completed"
             current.completion_evidence = evidence
     
+    def advance_to_next_objective(self) -> bool:
+        """次の未完了の目標ステップに進む
+        
+        Returns:
+            次の目標ステップに進めた場合True、全て完了している場合False
+        """
+        # 現在のステップ以降で、未完了のobjectiveステップを探す
+        for i, step in enumerate(self.objective_steps):
+            if step.step_type == "objective" and step.status in ("pending", "in_progress"):
+                if step.status == "pending":
+                    step.status = "in_progress"
+                self.current_step_index = i
+                return True
+        return False
+    
     def mark_current_failed(self, reason: str = "") -> None:
         """現在のステップを失敗としてマーク
         
@@ -449,3 +478,6 @@ class ObjectiveProgress(BaseModel):
         
         return "\n".join(lines)
 
+
+# 前方参照の解決
+ObjectiveStep.model_rebuild()

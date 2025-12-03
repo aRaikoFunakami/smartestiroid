@@ -433,11 +433,11 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
 
             # 任意の追加設定
             capabilities.update({
-                "appium:waitForIdleTimeout": 1000, # 高速化のため待機タイムアウトを1秒に設定
                 "appium:noReset": no_reset, # noResetがTrueならアプリをリセットしない
                 "appium:appWaitActivity": "*", # すべてのアクティビティを待機
                 "appium:autoGrantPermissions": True, # 権限を自動付与
                 "appium:dontStopAppOnReset": dont_stop_app_on_reset, # セッションリセット時にアプリを停止しない
+                "appium:adbExecTimeout": 60000,
             })
 
             # Apply all capabilities from the loaded dictionary

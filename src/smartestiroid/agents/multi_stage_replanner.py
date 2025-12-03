@@ -129,15 +129,22 @@ class MultiStageReplanner:
 - 実行計画が全て完了しても、目標ステップが未達成なら「未達成」と判断すること
 - 現在評価中の目標ステップ「{current_objective or goal}」が達成されているかを特に評価すること
 
+【「確認する」目標の判定基準】（重要）
+- 「〇〇を確認する」「〇〇ダイアログを確認する」目標の場合:
+  - 対象が画面に表示されている → 「達成」（表示を確認できた）
+  - 対象が画面に表示されていない → 「達成」（非表示を確認できた）
+  - 重要: 「確認する」とは「有無を確認する」こと
+  - 対象が存在しないことも、確認の結果として「達成」と判定する
+
 【分析指示】
 1. 前ステップからの画面変化と差分（UI要素の追加/削除/変更）
 2. 現在の画面の種類（例：ホーム画面、検索結果、設定画面など）
-3. 画面上の主要UI要素の説明
+3. 画面上の主要UI要素の説明 (ボタン、テキストフィールド、画像、リスト、メニュー、ダイアログ、背景などを resource-id や class 名で具体的に記述)
 4. 目標達成を妨げるダイアログやオーバーレイの有無（重要：これがあればまず処理が必要）
 5. 現在の目標ステップが達成されているかどうか
 6. 現在の目標ステップの達成/未達成の根拠
 7. 全体の目標が達成されているかどうか
-8. 次に実行すべきアクションの提案
+8. 次に実行すべきアクションの提案（任意）
 
 現在のロケーター情報:
 {locator}
@@ -258,7 +265,14 @@ class MultiStageReplanner:
             allure.attach(str(e), name="❌ decide_action: Structured Output Error", attachment_type=allure.attachment_type.TEXT)
             return "PLAN", "構造化出力エラーのためフォールバック"
     
-    async def build_plan(self, goal: str, original_plan: list, past_steps: list, state_analysis: StateAnalysis) -> Plan:
+    async def build_plan(
+        self,
+        goal: str,
+        original_plan: list,
+        past_steps: list,
+        state_analysis: StateAnalysis,
+        objective_progress: Optional[ObjectiveProgress] = None
+    ) -> Plan:
         """ステージ3a: 次のPlanを作成
         
         Args:
@@ -266,11 +280,35 @@ class MultiStageReplanner:
             original_plan: 元の計画
             past_steps: 完了済みステップ
             state_analysis: analyze_stateからの構造化された状態分析結果
+            objective_progress: 目標進捗管理オブジェクト
         """
         remaining = original_plan[len(past_steps):]
         total_steps = len(original_plan)
         completed_steps = len(past_steps)
         remaining_count = len(remaining)
+        
+        # 目標ステップ情報を構築
+        objective_info = ""
+        current_objective = ""
+        remaining_objectives = []
+        if objective_progress:
+            current_step = objective_progress.get_current_step()
+            if current_step:
+                current_objective = current_step.description
+            
+            # 未完了の目標ステップ一覧
+            for step in objective_progress.objective_steps:
+                if step.status not in ("completed", "skipped"):
+                    remaining_objectives.append(f"  - [{step.index}] {step.description}")
+            
+            objective_info = f"""
+【★重要★ ユーザー目標ステップ】（これが達成基準）
+残り目標ステップ数: {len(remaining_objectives)}
+{chr(10).join(remaining_objectives) if remaining_objectives else "(全目標達成済み)"}
+
+【現在取り組むべき目標】
+{current_objective or "(全目標達成済み)"}
+"""
         
         # StateAnalysisから状態要約を構築
         state_summary = f"""
@@ -280,7 +318,7 @@ class MultiStageReplanner:
 ブロッキングダイアログ: {state_analysis.blocking_dialogs or "なし"}
 テスト進捗: {state_analysis.test_progress}
 検出された問題: {state_analysis.problems_detected or "なし"}
-目標達成: {"Yes" if state_analysis.goal_achieved else "No"}
+現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
 達成判断理由: {state_analysis.goal_achievement_reason}
 次のアクション提案: {state_analysis.suggested_next_action or "なし"}
 """
@@ -288,34 +326,36 @@ class MultiStageReplanner:
         prompt = f"""
 あなたは実行計画を作成するエキスパートです。
 
-目標
+【全体の目標】
 {goal}
+{objective_info}
 
-現在の状態分析結果:
+【現在の状態分析結果】
 {state_summary}
 
-【進捗状況】
+【LLM実行計画の進捗】（参考情報）
 計画総ステップ数: {total_steps}
 完了済みステップ数: {completed_steps}
 残りステップ数: {remaining_count}
-進捗率: {(completed_steps / total_steps * 100) if total_steps > 0 else 0:.0f}%
 
 残りの候補ステップ:
 {remaining}
 
-ノウハウ:   
+【ノウハウ】
 {self.knowhow}
 
-タスク:
-目標達成のために必要な最適なステップ列を作成してください。以下を必ず守ること：
-- ブロッキングダイアログがある場合は、まずそれを閉じるステップを最初に含めること
-- ステップを実行できる状態でない場合は、現在の状態を考慮して最適なステップを再構築してください
-- 可能なら既存未完了ステップを再利用し重複を避けること
-- ステップを選択した根拠（進捗・画面要素・残り目標）を簡潔に言語化すること
-- 現在の状態を考慮すること
-- 不要なステップは追加しない
+【★最重要ルール★】
+1. 生成するステップは**ユーザー目標ステップを達成するため**のものであること
+2. 現在取り組むべき目標「{current_objective or goal}」を達成するための最小限のステップを生成すること
+3. 目標ステップの数を超える過剰なステップを生成しないこと
+4. 現在の目標が達成済みなら、次の目標に進むステップのみを生成すること
+
+【タスク】
+現在の目標ステップを達成するために必要な最適なステップ列を作成してください：
+- ブロッキングダイアログがある場合は、まず閉じるステップを含める
+- 現在の画面状態を考慮して最適なステップを構築
+- 不要なステップは追加しない（目標達成に直接関係するもののみ）
 - 各ステップは具体的で実行可能なこと
-- 目標の手順を踏まえた、目標を達成するための全てのステップ列がふくまれていること
 
 【重要】ステップの効率化:
 関連する連続操作は**1つのステップにまとめること**。不必要に細かく分割しないこと。
@@ -324,7 +364,6 @@ class MultiStageReplanner:
 - テキスト入力系: 「検索ボックスをタップし、'キーワード'を入力して検索ボタンを押す」
 - ナビゲーション系: 「設定アイコンをタップし、Wi-Fi設定を開いてONに切り替える」
 - 確認・検証系: 「ページをスクロールして目的の要素を探し、見つかったらタップする」
-- ✗ 分割禁止例: 1.ボックスタップ 2.入力 3.ボタン押下
 
 ◆ 分割すべきケース（別ステップにする）:
 - 画面遷移を伴う場合（ロケーターが変わる）
@@ -332,9 +371,10 @@ class MultiStageReplanner:
 - 結果の検証が必要な場合（操作後の確認）
 - 別アプリ/コンテキストに切り替わる場合
 
-厳格ルール:
+【厳格ルール】
 - アカウント作成は禁止
 - 自動ログインは禁止
+- 目標ステップと関係ない操作は禁止
 
 出力形式（JSON）:
 厳密なJSON形式
