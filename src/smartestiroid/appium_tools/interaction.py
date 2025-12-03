@@ -193,7 +193,9 @@ def send_keys(by: str, value: str, text: str) -> str:
     - Works with IME (Input Method Editor) and autocomplete
     - Appends text without clearing existing content
     
-    For special cases where you need to bypass the keyboard, use set_value() instead.
+    ⚠️ IMPORTANT: Only use this on input elements (EditText, TextField).
+    If the screen has changed (after clicking, scrolling, etc.), 
+    call get_page_source() first to get the latest UI state.
     
     Args:
         by: The locator strategy (e.g., "xpath", "id", "accessibility_id")
@@ -211,7 +213,23 @@ def send_keys(by: str, value: str, text: str) -> str:
     if error:
         return error
     
-    element.click()
-    element.send_keys(text)
-    logger.info(f"🔧 Sent keys '{text}' to element by {by} with value {value}")
-    return f"Successfully sent keys '{text}' to element"
+    # 要素のクラス名を取得して入力可能かチェック
+    try:
+        class_name = element.get_attribute("class") or ""
+    except Exception:
+        class_name = ""
+    
+    try:
+        element.click()
+        element.send_keys(text)
+        logger.info(f"🔧 Sent keys '{text}' to element by {by} with value {value}")
+        return f"Successfully sent keys '{text}' to element"
+    except Exception as e:
+        error_msg = str(e)
+        if "Cannot set the element" in error_msg or "InvalidElementState" in error_msg:
+            return (
+                f"Error: Cannot input text to this element (class: {class_name}). "
+                f"This element is not an input field (EditText/TextField), or the UI has changed. "
+                f"Please call get_page_source() to get the latest UI state and find the correct input element (usually EditText or TextField class)."
+            )
+        raise

@@ -6,6 +6,7 @@ from langchain.tools import tool
 from selenium.common.exceptions import InvalidSessionIdException
 
 from .interaction import _find_element_internal
+from .xml_compressor import compress_xml
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,12 @@ def get_page_source() -> str:
     The XML shows all elements with their attributes (resource-id, text, class, content-desc).
     This helps you write accurate selectors instead of guessing.
     
+    Note: The XML is compressed to reduce token usage:
+    - Unnecessary attributes are removed (index, package, displayed, etc.)
+    - Empty text/content-desc/resource-id attributes are removed
+    - Empty elements with no meaningful attributes are removed
+    - XML structure (parent-child relationships) is preserved
+    
     Returns:
         The XML page source if successful, or an error message
         
@@ -93,9 +100,11 @@ def get_page_source() -> str:
     
     try:
         source = driver.page_source
-        logger.info("🔧 Page source retrieved successfully")  
-        logger.debug(f"\n{source}\n")     
-        return f"Page source retrieved successfully:\n{source}"
+        # XMLを圧縮して不要なデータを削除
+        compressed_source = compress_xml(source)
+        logger.info("🔧 Page source retrieved and compressed successfully")  
+        logger.debug(f"\n{compressed_source}\n")     
+        return f"Page source retrieved successfully:\n{compressed_source}"
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
         raise

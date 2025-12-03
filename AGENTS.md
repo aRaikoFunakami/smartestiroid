@@ -94,7 +94,8 @@ tests/
 ├── test_appium_tools_navigation.py       # ナビゲーション・スクロールテスト
 ├── test_appium_tools_app.py              # アプリ管理テスト
 ├── test_appium_tools_device.py           # デバイス状態テスト
-└── test_appium_tools_token_counter.py    # トークンカウンターテスト（Android不要）
+├── test_appium_tools_token_counter.py    # トークンカウンターテスト（Android不要）
+└── test_xml_compressor.py                # XML圧縮テスト（Android不要）
 ```
 
 ### テスト実行
@@ -124,6 +125,9 @@ uv run pytest tests/test_appium_tools_device.py
 # トークンカウンターテスト（Android不要）
 uv run pytest tests/test_appium_tools_token_counter.py
 
+# XML圧縮テスト（Android不要）
+uv run pytest tests/test_xml_compressor.py
+
 # 特定のテストを実行
 uv run pytest tests/test_appium_tools_session.py -k "test_take_screenshot"
 
@@ -136,6 +140,18 @@ uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0001"
 # 高速モードで実行
 uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0001" --mini-model
 ```
+
+---
+
+## ⚠️ xml_compressor 更新時の必須事項
+
+`src/smartestiroid/appium_tools/xml_compressor.py` を更新した場合：
+
+1. **テスト実行必須**: `uv run pytest tests/test_xml_compressor.py -v` で100%パス
+2. **基本方針**: 「削除するものだけを明確に指定」（未知の属性・クラスは削除しない）
+3. **属性定義の参照**: UIAutomator2の公式属性定義を参照してDELETE_ATTRIBUTESを更新すること
+   - https://github.com/appium/appium-uiautomator2-server/blob/master/app/src/main/java/io/appium/uiautomator2/utils/Attribute.java
+4. **詳細**: アルゴリズムの詳細は `xml_compressor.py` 冒頭のコメントを参照
 
 ---
 
@@ -155,6 +171,7 @@ uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0001" --mini-model
 | アプリ管理 | `test_appium_tools_app.py` |
 | デバイス状態 | `test_appium_tools_device.py` |
 | トークンカウンター | `test_appium_tools_token_counter.py` |
+| XML圧縮 | `test_xml_compressor.py` |
 
 ```python
 @pytest.mark.asyncio
