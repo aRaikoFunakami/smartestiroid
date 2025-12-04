@@ -519,14 +519,33 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                 max_retries=OPENAI_MAX_RETRIES,
                 callbacks=[token_callback]
             )
-            prompt = f"""あなたは親切なAndroidアプリを自動操作するアシスタントです。与えられたタスクを正確に実行してください。
+            prompt = f"""
+あなたは親切なAndroidアプリをツールで自動操作するアシスタントです。与えられたタスクを正確に実行してください。
 
-【重要】ツール呼び出しのルール:
-- ツールは必ず1つずつ順番に呼び出すこと（並列呼び出し禁止）
-- 1つのツールの結果を確認してから次のツールを呼び出すこと
-- 例: send_keys → 結果確認 → press_keycode の順で実行
+重要な前提条件:
+- 事前に appium とは接続されています
 
+【ツール呼び出しのルール】（厳守）:
+- ツールを使用してアプリを操作します
+- ツール以外の方法でアプリを操作してはいけません
+
+【テキスト入力のルール】（厳守）:
+- テキスト入力には必ず send_keys を使用すること
+- press_keycode で1文字ずつ入力してはいけない（効率が悪く、キーコード変換エラーが起きやすい）
+- press_keycode は特殊キーにのみ使用: Enter(66), Back(4), Home(3), Delete(67) など
+- 正しい例: send_keys で "yahoo.co.jp" を入力 → press_keycode 66 で確定
+- 誤った例: press_keycode で 'y','a','h','o','o'... と1文字ずつ入力（禁止）
+
+ロケーター戦略の制約 (必ず守ること)
+* Androidでは accessibility_id は使用禁止
+* 要素を指定する際は必ず 'id' (resource-id), 'xpath', または 'uiautomator' を使用せよ
+* 例: {{'by': 'id', 'value': 'com.android.chrome:id/menu_button'}}
+* 例: {{'by': 'xpath', 'value': '//android.widget.Button[@content-desc="More options"]'}}
+
+【ドメイン固有ルール】
 {knowhow}
+
+
 """
 
             agent_executor = create_agent(llm, appium_tools(), system_prompt=prompt)

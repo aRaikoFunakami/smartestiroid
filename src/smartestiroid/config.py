@@ -51,27 +51,29 @@ RESULT_FAIL = "RESULT_FAIL"
 
 
 # --- Default Knowhow Information ---
-KNOWHOW_INFO = """
+# デフォルトのノウハウ情報はcustom_knowhow_example.txtから読み込みます
+# ツールの使い方に関する技術的なルール（send_keys vs press_keycodeなど）は
+# conftest.pyのagent_executorプロンプトで定義しています
+def _load_default_knowhow() -> str:
+    """custom_knowhow_example.txtからデフォルトのノウハウ情報を読み込む"""
+    from pathlib import Path
+    
+    # プロジェクトルートのcustom_knowhow_example.txtを探す
+    config_dir = Path(__file__).parent  # src/smartestiroid/
+    project_root = config_dir.parent.parent  # プロジェクトルート
+    knowhow_file = project_root / "custom_knowhow_example.txt"
+    
+    if knowhow_file.exists():
+        return knowhow_file.read_text(encoding="utf-8")
+    else:
+        # ファイルが見つからない場合のフォールバック
+        return """
 重要な前提条件:
 * 事前に appium とは接続されています
 
-ツール使用のルール - 必ず守ること:
-* アプリの操作は、必ずツールを使用して行いなさい
-* アプリ実行/起動: activate_app を使用せよ (但し、既に指定のアプリが起動している場合はスキップ処理で良い)
-* アプリ終了: terminate_app を使用せよ
-* URLバー等での入力確定: press_keycode で入力した文字列を press_keycode で <Enter> キーで確定せよ
-
-補助ルール:
-* プライバシーポリシーが表示された場合、同意操作を行え
-* ディスクリーマーポリシーが表示された場合、同意操作を行え
-* 初期設定ダイアログが表示された場合はデフォルト設定で対応せよ
-* 広告ダイアログが表示された場合は閉じる操作を行え
-
-ロケーター戦略の制約 (必ず守ること)
+ロケーター戦略の制約（必ず守ること）:
 * Androidでは accessibility_id は使用禁止
-* 要素を指定する際は必ず 'id' (resource-id), 'xpath', または 'uiautomator' を使用せよ
-* 例: {'by': 'id', 'value': 'com.android.chrome:id/menu_button'}
-* 例: {'by': 'xpath', 'value': '//android.widget.Button[@content-desc="More options"]'}
+* 要素を指定する際は 'id' (resource-id), 'xpath', または 'uiautomator' を使用
 
 厳格ルール:
 * アカウント情報の入力禁止
@@ -79,3 +81,5 @@ KNOWHOW_INFO = """
 * ログイン操作は禁止
 * アカウントの作成禁止
 """
+
+KNOWHOW_INFO = _load_default_knowhow()
