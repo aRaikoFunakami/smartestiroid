@@ -406,9 +406,9 @@ def verify_screen_content(target: str) -> str:
     Returns:
         A string indicating whether the target was found and evidence.
     """
-    from .session import _driver
+    from .session import driver
     
-    if _driver is None:
+    if driver is None:
         raise InvalidSessionIdException("No Appium session. Call start_session() first.")
     
     try:
