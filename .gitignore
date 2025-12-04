@@ -215,3 +215,5 @@ allure-*
 .DS_Store
 t4c_test.csv
 custom_knowhow_t4c.txt
+t4cv3.csv
+t4c.csv
