@@ -262,7 +262,7 @@ def create_workflow_functions(
 - 複数の要素が類似している場合は、目標ステップの指示と bounds や resource-id や content-desc や class 名を参考に正確に特定すること
 
 画面ロケーター情報:
-{locator}"""
+{ui_elements}"""
             
             try:
                 # マルチモーダルメッセージとして送信（画像付き）
@@ -408,11 +408,11 @@ def create_workflow_functions(
                 current_objective.status = "in_progress"
                 
                 # 画面分析を実行
-                screen_analysis = await planner.analyze_screen(locator, image_url, current_objective.description)
+                screen_analysis = await planner.analyze_screen(ui_elements, image_url, current_objective.description)
                 
                 # Step 2.5: 計画作成前に、目標が既に達成されているか評価
                 pre_eval = await planner.evaluate_objective_completion(
-                    current_objective, screen_analysis, locator, image_url
+                    current_objective, screen_analysis, ui_elements, image_url
                 )
                 
                 if pre_eval.achieved:
@@ -428,7 +428,7 @@ def create_workflow_functions(
                         current_objective.status = "in_progress"
                         print(Fore.GREEN + f"🎯 次の目標ステップへ: {current_objective.description}")
                         # 次の目標に対して画面分析と計画作成
-                        screen_analysis = await planner.analyze_screen(locator, image_url, current_objective.description)
+                        screen_analysis = await planner.analyze_screen(ui_elements, image_url, current_objective.description)
                     else:
                         # 全目標達成
                         print(Fore.GREEN + f"🎉 全目標ステップ達成！")
@@ -437,7 +437,7 @@ def create_workflow_functions(
                 
                 # 現在の目標に対する実行計画を作成（全目標ステップを渡して境界を明確に）
                 plan = await planner.create_execution_plan_for_objective(
-                    current_objective, screen_analysis, locator, image_url,
+                    current_objective, screen_analysis, ui_elements, image_url,
                     all_objective_steps=objective_progress.objective_steps
                 )
                 current_objective.execution_plan = plan.steps
@@ -606,7 +606,7 @@ def create_workflow_functions(
 
                 # 前回画像と現在画像を使ってリプラン
                 replan_result = await planner.replan(
-                    state, locator, image_url, previous_image_url,
+                    state, ui_elements, image_url, previous_image_url,
                     objective_progress=objective_progress_cache.get("progress")
                 )
 
