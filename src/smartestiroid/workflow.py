@@ -251,6 +251,12 @@ def create_workflow_functions(
 - アプリを再起動する → restart_app(app_id) を使用（terminate→待機→activateを自動実行）
 - 現在のアプリを確認する → get_current_app() を使用
 
+【確認ステップの優先ツール】
+「〇〇を確認する」「〇〇が表示されていることを確認する」などの確認ステップには、以下のツールを優先的に使用:
+- verify_screen_content(target) を使用（XMLとスクリーンショットをLLMで分析）
+- 例: 「利用規約ダイアログを確認する」→ verify_screen_content("利用規約ダイアログ")
+- 例: 「エラーメッセージが表示されていることを確認する」→ verify_screen_content("エラーメッセージ")
+
 【画面情報の活用方法】
 - 画像とロケーター情報の情報を突き合わせて画面オブジェクトの位置情報を正確に分析しなさい
 - 操作対象の要素を特定してツールを使用すること

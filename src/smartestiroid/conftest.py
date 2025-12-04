@@ -16,7 +16,7 @@ import os
 import asyncio
 import time
 
-from .appium_tools import appium_driver, appium_tools
+from .appium_tools import appium_driver, appium_tools, set_verify_model
 from .appium_tools.token_counter import TiktokenCountCallback
 
 # Import from newly created modules
@@ -141,6 +141,8 @@ def pytest_configure(config):
         cfg.planner_model = cfg.MODEL_MINI
         cfg.execution_model = cfg.MODEL_MINI
         cfg.evaluation_model = cfg.MODEL_EVALUATION_MINI
+        # verify_screen_content のモデルも更新
+        set_verify_model(cfg.MODEL_MINI)
         print(Fore.CYAN + "🚀 Miniモデルモードで実行します")
     
     # テストシートパスをグローバル変数として保存

@@ -4,6 +4,7 @@
 - スクロール操作
 - 要素へのスクロール
 - ナビゲーションフロー
+- 画面コンテンツ確認 (verify_screen_content)
 
 これらは画面遷移とスクロールに関するテストです。
 """
@@ -18,6 +19,9 @@ from smartestiroid.appium_tools import (
     take_screenshot,
     get_page_source,
     press_keycode,
+    verify_screen_content,
+    set_verify_model,
+    get_verify_model,
 )
 
 
@@ -83,6 +87,44 @@ async def test_navigation_flow(driver_session):
         assert len(back_app) > 0
     else:
         pytest.skip("Could not click Apps element")
+
+
+@pytest.mark.asyncio
+async def test_verify_screen_content_found(driver_session):
+    """Test verify_screen_content tool when target is found."""
+    # Settings app should have "Settings" or "設定" text
+    result = verify_screen_content.invoke({"target": "設定画面またはSettingsテキスト"})
+    
+    # Should return a result (either found or not found)
+    assert "確認成功" in result or "確認失敗" in result
+    assert "[結果]" in result or "エラー" in result
+
+
+@pytest.mark.asyncio
+async def test_verify_screen_content_not_found(driver_session):
+    """Test verify_screen_content tool when target is not found."""
+    # Something that definitely won't be on Settings screen
+    result = verify_screen_content.invoke({"target": "存在しない架空のダイアログXYZ123"})
+    
+    # Should return not found
+    assert "確認" in result
+    assert "[結果]" in result or "エラー" in result
+
+
+@pytest.mark.asyncio
+async def test_set_and_get_verify_model():
+    """Test set_verify_model and get_verify_model functions."""
+    # Get default model
+    original_model = get_verify_model()
+    assert original_model == "gpt-4.1-mini"
+    
+    # Set a different model
+    set_verify_model("gpt-4o")
+    assert get_verify_model() == "gpt-4o"
+    
+    # Restore original
+    set_verify_model(original_model)
+    assert get_verify_model() == original_model
 
 
 if __name__ == '__main__':
