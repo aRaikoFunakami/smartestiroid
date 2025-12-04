@@ -224,20 +224,37 @@ def create_workflow_functions(
             step_number = current_step_index + 1  # 1-indexed for display
             remaining_steps = total_steps - step_number
             
+            # 目標ステップのコンテキストを取得（Executorが正しい要素を特定できるようにする）
+            objective_context = ""
+            if objective_progress_cache["progress"] is not None:
+                current_obj = objective_progress_cache["progress"].get_current_step()
+                if current_obj:
+                    objective_context = f"""\n【現在の目標ステップ（重要なコンテキスト）】
+{current_obj.description}
+※ 上記の目標を達成するために、以下の実行ステップを行います。目標の文脈を考慮して正しい要素を特定してください。
+"""
+            
             task_formatted = f"""【あなたの担当】
 
 - あなたはAndroidアプリをツールを使って自動操作するエージェントです
-
+{objective_context}
 次のタスクを実行してください:
 ステップ{step_number}/{total_steps}: {task}
 
 【厳格ルール】
 - ツールを用いて、上記のステップ「{task}」のみを実行しなさい
 
+【アプリ操作の優先ツール】
+以下の操作は、明示的な指示がない限り専用ツールを優先的に使用すること:
+- アプリを起動する → activate_app(app_id) を使用
+- アプリを終了する → terminate_app(app_id) を使用
+- アプリを再起動する → restart_app(app_id) を使用（terminate→待機→activateを自動実行）
+- 現在のアプリを確認する → get_current_app() を使用
+
 【画面情報の活用方法】
 - 画像とロケーター情報の情報を突き合わせて画面オブジェクトの位置情報を正確に分析しなさい
 - 操作対象の要素を特定してツールを使用すること
-- 複数の要素が類似している場合は、ステップの指示と bounds や resource-id や class 名を参考に正確に特定すること
+- 複数の要素が類似している場合は、目標ステップの指示と bounds や resource-id や content-desc や class 名を参考に正確に特定すること
 
 画面ロケーター情報:
 {locator}"""

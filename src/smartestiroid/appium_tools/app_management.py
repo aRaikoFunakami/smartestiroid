@@ -126,3 +126,46 @@ def list_apps() -> str:
     except InvalidSessionIdException:
         # Session expired - re-raise to caller
         raise
+
+
+@tool
+def restart_app(app_id: str, wait_seconds: int = 3) -> str:
+    """Restart an app by terminating and then activating it.
+    
+    This tool terminates the specified app, waits for a specified duration,
+    and then activates the app again. Useful for clearing app state or
+    recovering from stuck states.
+    
+    Args:
+        app_id: The app package name to restart (e.g., "com.android.chrome")
+        wait_seconds: Seconds to wait between terminate and activate (default: 3)
+        
+    Returns:
+        A message indicating success or failure
+        
+    Raises:
+        ValueError: If driver is not initialized
+        InvalidSessionIdException: If Appium session has expired
+    """
+    from .session import driver
+    if not driver:
+        raise ValueError("Driver is not initialized")
+    
+    try:
+        # Step 1: Terminate the app
+        terminate_result = driver.terminate_app(app_id)
+        logger.info(f"🔄 Terminated app for restart: {app_id}, result: {terminate_result}")
+        
+        # Step 2: Wait between terminate and activate
+        logger.info(f"🔄 Waiting {wait_seconds} seconds before reactivating...")
+        time.sleep(wait_seconds)
+        
+        # Step 3: Activate the app
+        driver.activate_app(app_id)
+        logger.info(f"🔄 Reactivated app: {app_id}")
+        
+        time.sleep(1)  # ツール実行後のウェイト
+        return f"Successfully restarted app: {app_id} (waited {wait_seconds}s between terminate and activate)"    
+    except InvalidSessionIdException:
+        # Session expired - re-raise to caller
+        raise
