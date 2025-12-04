@@ -415,7 +415,7 @@ def verify_screen_content(target: str) -> str:
         # take_screenshot と get_page_source ツールを使用
         # take_screenshot は既にJPEG変換・リサイズ済み、data URL形式で取得
         image_url = take_screenshot.invoke({"as_data_url": True})
-        compressed_xml = get_page_source.invoke({})
+        ui_elements = get_page_source.invoke({})
         
         # Call LLM to verify with structured output
         base_model = ChatOpenAI(model=_verify_model_name, temperature=0)
@@ -428,7 +428,7 @@ def verify_screen_content(target: str) -> str:
 
 【XML Page Source】
 ```xml
-{compressed_xml}
+{ui_elements}
 ```
 
 【判定基準】

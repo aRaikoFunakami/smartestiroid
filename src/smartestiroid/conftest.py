@@ -473,7 +473,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             tools_list = appium_tools()
             tools_dict = {tool.name: tool for tool in tools_list}
             screenshot_tool = tools_dict.get("take_screenshot")
-            generate_locators = tools_dict.get("get_page_source")
+            get_page_source_tool = tools_dict.get("get_page_source")
             activate_app = tools_dict.get("activate_app")
             terminate_app = tools_dict.get("terminate_app")
             
@@ -583,7 +583,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                     planner,
                     agent_executor,
                     screenshot_tool,
-                    generate_locators,
+                    get_page_source_tool,
                     evaluate_with_token_callback,
                     max_replan_count,
                     knowhow,

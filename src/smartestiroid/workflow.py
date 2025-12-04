@@ -15,7 +15,7 @@ from .config import KNOWHOW_INFO, RESULT_PASS, RESULT_FAIL
 # モデル変数（planner_model等）は pytest_configure で動的に変更されるため、
 # 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
 from . import config as cfg
-from .utils import AllureToolCallbackHandler, generate_screen_info
+from .utils import AllureToolCallbackHandler
 
 
 class FailureType(Enum):
@@ -138,7 +138,7 @@ def create_workflow_functions(
     planner,
     agent_executor,
     screenshot_tool,
-    generate_locators,
+    get_page_source_tool,
     evaluate_task_result_func,
     max_replan_count: int = 10,
     knowhow: str = KNOWHOW_INFO,
@@ -150,7 +150,7 @@ def create_workflow_functions(
         planner: SimplePlannerインスタンス
         agent_executor: エージェント実行エンジン
         screenshot_tool: スクリーンショット取得ツール
-        generate_locators: ロケーター生成ツール
+        get_page_source_tool: ページソース取得ツール
         evaluate_task_result_func: タスク結果評価関数
         max_replan_count: 最大リプラン回数（デフォルト10回）
         knowhow: ノウハウ情報（SimplePlannerに渡される）
@@ -201,13 +201,12 @@ def create_workflow_functions(
             tool_callback.start_step(current_step_index, task)
             
             # 現在の画面情報を取得
-            locator, image_url = await generate_screen_info(
-                screenshot_tool, generate_locators
-            )
+            image_url = await screenshot_tool.ainvoke({"as_data_url": True})
+            ui_elements = await get_page_source_tool.ainvoke({})
             
             # ログとAllureには整形したロケーター情報を出力
             allure.attach(
-                locator,
+                ui_elements,
                 name="📍 Locator Information",
                 attachment_type=allure.attachment_type.TEXT
             )
@@ -370,14 +369,13 @@ def create_workflow_functions(
 
             start_time = time.time()
             try:
-                locator, image_url = await generate_screen_info(
-                    screenshot_tool, generate_locators
-                )
+                image_url = await screenshot_tool.ainvoke({"as_data_url": True})
+                ui_elements = await get_page_source_tool.ainvoke({})
 
-                if locator:
+                if ui_elements:
                     # ログとAllureには整形したロケーター情報を出力
                     allure.attach(
-                        locator,
+                        ui_elements,
                         name="📍 Locator Information",
                         attachment_type=allure.attachment_type.TEXT
                     )
@@ -578,14 +576,13 @@ def create_workflow_functions(
                 previous_image_url = image_cache["previous_image_url"]
 
                 # 現在の画面情報を取得
-                locator, image_url = await generate_screen_info(
-                    screenshot_tool, generate_locators
-                )
+                image_url = await screenshot_tool.ainvoke({"as_data_url": True})
+                ui_elements = await get_page_source_tool.ainvoke({})
 
-                if locator:
+                if ui_elements:
                     # ログとAllureには整形したロケーター情報を出力
                     allure.attach(
-                        locator,
+                        ui_elements,
                         name="📍 Locator Information",
                         attachment_type=allure.attachment_type.TEXT
                     )
