@@ -102,6 +102,11 @@ def take_screenshot(as_data_url: bool = False) -> str:
     - Converted to JPEG format for Vision API compatibility
     - Resized to max 1280px width for token efficiency
     
+    Retry behavior:
+    - If screenshot capture fails, wait 15 seconds and retry
+    - If still failing, wait 30 seconds and retry once more
+    - After 3 total attempts, raise the error
+    
     Args:
         as_data_url: If True, return with "data:image/jpeg;base64," prefix for Vision API.
                      If False (default), return raw base64 string.
@@ -112,26 +117,49 @@ def take_screenshot(as_data_url: bool = False) -> str:
     Raises:
         ValueError: If driver is not initialized
         InvalidSessionIdException: If Appium session has expired
+        Exception: If screenshot capture fails after all retries
     """
     from .session import driver
     if not driver:
         raise ValueError("Driver is not initialized")
     
-    try:
-        screenshot_base64 = driver.get_screenshot_as_base64()
-        # Vision API用に処理（JPEG変換・リサイズ）
-        processed_screenshot = _process_screenshot_for_vision(screenshot_base64)
-        # UI表示用にファイルにも保存（元の画像を保存）
-        _save_screenshot_to_file(screenshot_base64)
-        logger.info("🔧 Screenshot taken and processed successfully")
-        time.sleep(1)  # ツール実行後のウェイト
-        
-        if as_data_url:
-            return f"data:image/jpeg;base64,{processed_screenshot}"
-        return processed_screenshot
-    except InvalidSessionIdException:
-        # Session expired - re-raise to caller
-        raise
+    # リトライ設定: (待機秒数, 試行番号)
+    retry_delays = [0, 15, 30]  # 初回は待機なし、1回目リトライ15秒、2回目リトライ30秒
+    last_error = None
+    
+    for attempt, delay in enumerate(retry_delays):
+        try:
+            if delay > 0:
+                logger.warning(f"⏳ スクリーンショット取得リトライ {attempt}/{len(retry_delays)-1}: {delay}秒待機後に再試行します...")
+                time.sleep(delay)
+            
+            screenshot_base64 = driver.get_screenshot_as_base64()
+            # Vision API用に処理（JPEG変換・リサイズ）
+            processed_screenshot = _process_screenshot_for_vision(screenshot_base64)
+            # UI表示用にファイルにも保存（元の画像を保存）
+            _save_screenshot_to_file(screenshot_base64)
+            
+            if attempt > 0:
+                logger.info(f"✅ スクリーンショット取得成功（リトライ {attempt}回目）")
+            else:
+                logger.info("🔧 Screenshot taken and processed successfully")
+            
+            time.sleep(1)  # ツール実行後のウェイト
+            
+            if as_data_url:
+                return f"data:image/jpeg;base64,{processed_screenshot}"
+            return processed_screenshot
+            
+        except InvalidSessionIdException:
+            # Session expired - re-raise immediately without retry
+            raise
+        except Exception as e:
+            last_error = e
+            logger.warning(f"⚠️ スクリーンショット取得失敗（試行 {attempt + 1}/{len(retry_delays)}）: {e}")
+            # 最後の試行でなければ続行、最後なら例外を再送出
+            if attempt == len(retry_delays) - 1:
+                logger.error(f"❌ スクリーンショット取得が全てのリトライ後も失敗しました: {last_error}")
+                raise
 
 
 @tool
