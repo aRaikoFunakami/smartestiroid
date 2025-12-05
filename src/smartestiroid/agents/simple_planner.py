@@ -4,6 +4,7 @@ Simple planner for SmartestiRoid test framework.
 This module provides a plan-and-execute agent with multi-stage replanning.
 """
 
+import pytest
 from typing import Optional
 from pydantic import BaseModel, Field
 from colorama import Fore
@@ -15,7 +16,7 @@ from ..models import PlanExecute, Plan, Response, Act
 from ..progress import ObjectiveStep, ObjectiveProgress, ObjectiveStepResult, ParsedObjectiveSteps
 from ..config import (
     OPENAI_TIMEOUT, OPENAI_MAX_RETRIES,
-    MODEL_STANDARD, KNOWHOW_INFO, RESULT_PASS
+    MODEL_STANDARD, KNOWHOW_INFO, RESULT_PASS, RESULT_FAIL,
 )
 from .multi_stage_replanner import MultiStageReplanner
 from ..utils.allure_logger import log_openai_error_to_allure
@@ -455,18 +456,62 @@ class SimplePlanner:
             previous_image_url: 前回のスクリーンショット
             objective_progress: 目標進捗管理オブジェクト（必須）
         """
+        import time
+        from ..appium_tools import take_screenshot, get_page_source
+        
+        # 設定値
+        SCREEN_INCONSISTENCY_WAIT_SEC = 3  # 画面不整合時の待機時間
+        SCREEN_INCONSISTENCY_MAX_RETRIES = 2  # 最大リトライ回数
+        
         # Multi-stage replan処理
         try:
-            print(Fore.CYAN + f"🔀 Multi-stage replan: STAGE 1（State Analysis）[model: {self.model_name}]")
-            state_analysis = await self.replanner.analyze_state(
-                goal=state["input"],
-                original_plan=state["plan"],
-                past_steps=state["past_steps"],
-                locator=locator,
-                previous_image_url=previous_image_url,
-                current_image_url=image_url,
-                objective_progress=objective_progress
-            )
+            # ★ デバッグ用ウェイト ★
+            print(Fore.CYAN + "⏳ Replan前の待機中... (3秒)")
+            time.sleep(3)
+
+            # ★ 画面不整合時の再チェックループ ★
+            retry_count = 0
+            while True:
+                print(Fore.CYAN + f"🔀 Multi-stage replan: STAGE 1（State Analysis）[model: {self.model_name}]")
+                state_analysis = await self.replanner.analyze_state(
+                    goal=state["input"],
+                    original_plan=state["plan"],
+                    past_steps=state["past_steps"],
+                    locator=locator,
+                    previous_image_url=previous_image_url,
+                    current_image_url=image_url,
+                    objective_progress=objective_progress
+                )
+                
+                # 画面不整合チェック
+                if state_analysis.has_screen_inconsistency():
+                    retry_count += 1
+                    if retry_count <= SCREEN_INCONSISTENCY_MAX_RETRIES:
+                        print(Fore.YELLOW + f"⚠️ 画面不整合を検出: {state_analysis.screen_inconsistency}")
+                        print(Fore.YELLOW + f"⏳ {SCREEN_INCONSISTENCY_WAIT_SEC}秒待機して再チェックします... (リトライ {retry_count}/{SCREEN_INCONSISTENCY_MAX_RETRIES})")
+                        time.sleep(SCREEN_INCONSISTENCY_WAIT_SEC)
+                        
+                        # 画面情報を再取得（LangChainツールなので.invoke()で呼び出し）
+                        previous_image_url = image_url  # 現在の画像を前回として保持
+                        locator = get_page_source.invoke({})
+                        image_url = take_screenshot.invoke({"as_data_url": True})
+                        continue  # 再分析
+                    else:
+                        # リトライ上限到達 → テスト失敗
+                        error_msg = f"画面不整合が{retry_count}回のリトライ後も解消されませんでした。\n詳細: {state_analysis.screen_inconsistency}"
+                        print(Fore.RED + f"❌ 画面不整合が解消されません（{retry_count}回リトライ後）")
+                        print(Fore.RED + f"   詳細: {state_analysis.screen_inconsistency}")
+                        allure.attach(
+                            error_msg,
+                            name="❌ 画面不整合（リトライ上限到達）",
+                            attachment_type=allure.attachment_type.TEXT
+                        )
+                        pytest.fail(error_msg)
+                else:
+                    # 正常（不整合なし）
+                    if retry_count > 0:
+                        print(Fore.GREEN + f"✅ 画面不整合が解消されました（{retry_count}回目のリトライで成功）")
+                    break  # 正常に続行
             
             # ★ ダイアログ処理モードの切り替え ★
             if state_analysis.blocking_dialogs:
@@ -512,9 +557,8 @@ class SimplePlanner:
 画面変化: {state_analysis.screen_changes}
 主要要素: {state_analysis.main_elements}
 ブロッキングダイアログ: {state_analysis.blocking_dialogs or "なし"}{dialog_mode_info}
+画面不整合: {state_analysis.screen_inconsistency or "なし"}
 テスト進捗: {state_analysis.test_progress}
-検出された問題: {state_analysis.problems_detected or "なし"}
-アプリ不具合検出: {"Yes - " + (state_analysis.app_defect_reason or "詳細不明") if state_analysis.app_defect_detected else "No"}
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
 現在の目標ステップ根拠: {state_analysis.current_objective_evidence}
 全ての目標ステップ達成: {"Yes" if all_objectives_completed else "No"}
