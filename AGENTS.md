@@ -240,6 +240,36 @@ async def example_function(
     ...
 ```
 
+### ⚠️ 必須オブジェクトと互換性に関するルール
+
+開発中のプロジェクトであるため、**無駄な互換性コードは書かない**ことを心がける。
+
+1. **ObjectiveProgressは必須**
+   - `ObjectiveProgress`は進捗管理の核となるオブジェクト
+   - 全ての`analyze_state`, `decide_action`, `build_plan`, `build_response`, `replan`で必須
+   - `Optional[ObjectiveProgress] = None`やフォールバックコードは禁止
+   
+   ```python
+   # ❌ 悪い例（フォールバック付き）
+   def build_plan(objective_progress: Optional[ObjectiveProgress] = None):
+       if objective_progress:
+           remaining = objective_progress.get_current_remaining_plan()
+       else:
+           remaining = original_plan[len(past_steps):]  # フォールバック
+   
+   # ✅ 良い例（必須）
+   def build_plan(objective_progress: ObjectiveProgress):
+       remaining = objective_progress.get_current_remaining_plan()
+   ```
+
+2. **フォールバックコードは不具合の温床**
+   - 「なくても動く」コードは、本来のロジックが正しく動作しているか検証できない
+   - 問題が発覚したとき、どちらのコードパスで問題が起きているか分からなくなる
+
+3. **cleanなコードを優先**
+   - 開発中は互換性より、正しく動作するシンプルなコードを優先する
+   - 後方互換性が必要になったら、その時点で対応する
+
 ---
 
 ## 🚀 よく使うコマンド
