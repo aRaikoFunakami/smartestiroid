@@ -270,10 +270,27 @@ def pytest_runtest_setup(item):
 def pytest_sessionstart(session):
     """テストセッション開始時の処理"""
     from pathlib import Path
-    # ログを初期化（ログディレクトリを作成）
-    log_dir = Path(os.getcwd()) / "smartestiroid_logs"
-    SLog.init(test_id="session", output_dir=log_dir)
-    SLog.info(LogCategory.TEST, LogEvent.START, {"event": "session_start"}, "Test Session Started")
+    from datetime import datetime
+    import sys
+    
+    # コマンド実行ごとのタイムスタンプを生成
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # 1回のコマンド実行ごとのフォルダを作成
+    # smartestiroid_logs/run_YYYYMMDD_HHMMSS/
+    base_log_dir = Path(os.getcwd()) / "smartestiroid_logs"
+    run_log_dir = base_log_dir / f"run_{run_timestamp}"
+    run_log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # セッション全体で共有するためにグローバル変数に保存
+    sys._pytest_run_log_dir = run_log_dir
+    
+    # ログを初期化（実行ごとのフォルダ内に保存）
+    SLog.init(test_id="session", output_dir=run_log_dir)
+    SLog.info(LogCategory.TEST, LogEvent.START, {
+        "event": "session_start",
+        "log_dir": str(run_log_dir)
+    }, f"Test Session Started (logs: {run_log_dir.name})")
 
 
 def pytest_sessionfinish(session, exitstatus):
