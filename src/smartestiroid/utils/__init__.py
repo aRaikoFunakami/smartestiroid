@@ -8,10 +8,19 @@ from .allure_logger import (
     log_openai_error_to_allure
 )
 from .device_info import write_device_info_once
+from .structured_logger import StructuredLogger, SLog, LogCategory, LogEvent
+from .log_analyzer import LogAnalyzer, LogEntry, AnalysisResult
 
 __all__ = [
     'AllureToolCallbackHandler',
     'log_openai_timeout_to_allure',
     'log_openai_error_to_allure',
     'write_device_info_once',
+    'StructuredLogger',
+    'SLog',
+    'LogCategory',
+    'LogEvent',
+    'LogAnalyzer',
+    'LogEntry',
+    'AnalysisResult',
 ]

@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
-from colorama import Fore, init
 
 from langchain_openai import ChatOpenAI
+from .utils.structured_logger import SLog, LogCategory, LogEvent
 from langchain.agents import create_agent
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -43,8 +43,6 @@ PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # デフォルトのcapabilitiesパス（pytest_configureで更新される）
 capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
-
-init(autoreset=True)
 
 
 # Pytest hooks for command-line options
@@ -94,7 +92,7 @@ def custom_knowhow(request):
     # テキストが直接指定された場合（最優先）
     knowhow_text = request.config.getoption("--knowhow-text")
     if knowhow_text:
-        print(Fore.CYAN + "📝 カスタムknowhow（直接指定）を使用します")
+        SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"source": "command_line"}, "カスタムknowhow（直接指定）を使用します")
         return knowhow_text
     
     # ファイルパスが指定された場合
@@ -106,12 +104,12 @@ def custom_knowhow(request):
         try:
             with open(knowhow_path, "r", encoding="utf-8") as f:
                 knowhow_content = f.read()
-            print(Fore.CYAN + f"📝 カスタムknowhow（ファイル: {knowhow_path}）を使用します")
+            SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"source": "file", "path": knowhow_path}, f"カスタムknowhow（ファイル: {knowhow_path}）を使用します")
             return knowhow_content
         except FileNotFoundError:
-            print(Fore.RED + f"⚠️  警告: knowhowファイル '{knowhow_path}' が見つかりません。デフォルトを使用します。")
+            SLog.warn(LogCategory.CONFIG, LogEvent.FAIL, {"path": knowhow_path}, f"knowhowファイル '{knowhow_path}' が見つかりません。デフォルトを使用します。")
         except Exception as e:
-            print(Fore.RED + f"⚠️  警告: knowhowファイルの読み込みエラー: {e}。デフォルトを使用します。")
+            SLog.warn(LogCategory.CONFIG, LogEvent.FAIL, {"path": knowhow_path, "error": str(e)}, f"knowhowファイルの読み込みエラー: {e}。デフォルトを使用します。")
     
     # デフォルト
     return KNOWHOW_INFO
@@ -124,7 +122,7 @@ def testsheet_path(request):
     --testsheet オプションで指定されたパス、またはデフォルトの testsheet.csv を返す
     """
     path = request.config.getoption("--testsheet")
-    print(Fore.CYAN + f"📋 テストシートCSV: {path}")
+    SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"testsheet": path}, f"テストシートCSV: {path}")
     return path
 
 
@@ -143,7 +141,7 @@ def pytest_configure(config):
         cfg.evaluation_model = cfg.MODEL_EVALUATION_MINI
         # verify_screen_content のモデルも更新
         set_verify_model(cfg.MODEL_MINI)
-        print(Fore.CYAN + "🚀 Miniモデルモードで実行します")
+        SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"mode": "mini"}, "Miniモデルモードで実行します")
     
     # テストシートパスをグローバル変数として保存
     sys._pytest_testsheet_path = config.getoption("--testsheet")
@@ -192,7 +190,7 @@ def pytest_collection_finish(session):
         item._test_progress_total = total
         sys._pytest_test_order[item.name] = i
     
-    print(Fore.CYAN + f"\n[PROGRESS] {{\"total\": {total}, \"status\": \"collected\"}}")
+    SLog.log(LogCategory.TEST, LogEvent.UPDATE, {"total": total}, f"[PROGRESS] {{\"total\": {total}, \"status\": \"collected\"}}")
 
 
 def pytest_runtest_setup(item):
@@ -203,16 +201,21 @@ def pytest_runtest_setup(item):
 
 def pytest_sessionstart(session):
     """テストセッション開始時の処理"""
-    print(Fore.CYAN + "\n" + "="*70)
-    print(Fore.CYAN + "🚀 Test Session Started")
-    print(Fore.CYAN + "="*70)
+    from pathlib import Path
+    # ログを初期化（ログディレクトリを作成）
+    log_dir = Path(os.getcwd()) / "smartestiroid_logs"
+    SLog.init(test_id="session", output_dir=log_dir)
+    SLog.info(LogCategory.TEST, LogEvent.START, {"event": "session_start"}, "Test Session Started")
 
 
 def pytest_sessionfinish(session, exitstatus):
     """テストセッション終了時に全体の課金情報をAllureレポートに書き込む"""
-    print(Fore.CYAN + "\n" + "="*70)
-    print(Fore.CYAN + "📊 Generating Global Token Usage Report")
-    print(Fore.CYAN + "="*70)
+    SLog.info(LogCategory.TOKEN, LogEvent.START, {"event": "generating_report"}, "Generating Global Token Usage Report")
+    
+    # テスト終了時のステータスをログ出力
+    exit_status_map = {0: "PASSED", 1: "FAILED", 2: "INTERRUPTED", 5: "NO_TESTS"}
+    status_str = exit_status_map.get(exitstatus, f"UNKNOWN({exitstatus})")
+    SLog.info(LogCategory.TEST, LogEvent.END, {"exit_status": exitstatus, "status": status_str}, f"Test Session Finished: {status_str}")
     
     # グローバル統計のテキストはコンソールに出力しない
     global_summary_text = TiktokenCountCallback.format_global_summary()
@@ -276,7 +279,7 @@ def pytest_sessionfinish(session, exitstatus):
             f"{global_summary.get('total_cost_usd', 0.0):.6f}"
         ])
     
-    print(Fore.CYAN + f"✅ Token usage CSV written to {csv_file}")
+    SLog.info(LogCategory.TOKEN, LogEvent.COMPLETE, {"file": csv_file}, f"Token usage CSV written to {csv_file}")
     
     # environment.propertiesの先頭に課金情報を追加
     env_file = os.path.join(allure_results_dir, "environment.properties")
@@ -303,7 +306,43 @@ def pytest_sessionfinish(session, exitstatus):
         # 既存の内容を追加
         f.write(existing_content)
     
-    print(Fore.CYAN + f"✅ Global token usage written to {env_file}")
+    SLog.info(LogCategory.TOKEN, LogEvent.COMPLETE, {"file": env_file}, f"Global token usage written to {env_file}")
+    
+    # ログ解析ファイルを自動生成（LLM解析用）
+    _generate_log_analysis()
+    
+    # ログを閉じる
+    SLog.close()
+
+
+def _generate_log_analysis():
+    """テスト終了時にログ解析ファイルを自動生成"""
+    from .utils.log_analyzer import LogAnalyzer
+    
+    log_file = SLog.get_log_file()
+    if log_file and log_file.exists():
+        try:
+            analyzer = LogAnalyzer(log_file)
+            
+            # LLM解析用ファイルを出力
+            analyzer.export_for_llm_analysis()
+            
+            # プロンプトファイルを出力
+            analyzer.export_prompts()
+            
+            SLog.info(
+                LogCategory.SESSION, 
+                LogEvent.COMPLETE, 
+                {"analysis_file": str(log_file.parent / f"{log_file.stem}_analysis.txt")},
+                f"ログ解析ファイルを生成しました"
+            )
+        except Exception as e:
+            SLog.warn(
+                LogCategory.SESSION,
+                LogEvent.FAIL,
+                {"error": str(e)},
+                f"ログ解析ファイルの生成に失敗: {e}"
+            )
 
 
 async def evaluate_task_result(
@@ -331,7 +370,7 @@ async def evaluate_task_result(
         max_retries=OPENAI_MAX_RETRIES,
         callbacks=callbacks if callbacks else None
     )
-    print(Fore.CYAN + f"評価用モデル: {model}")
+    SLog.info(LogCategory.LLM, LogEvent.START, {"model": model, "purpose": "evaluation"}, f"評価用モデル: {model}")
 
     # 実行ステップ履歴の文字列化
     steps_summary = ""
@@ -375,8 +414,7 @@ async def evaluate_task_result(
 # 出力仕様:
 厳密JSON
 """
-    print(Fore.CYAN + "[evaluate_task_result] 評価プロンプトを生成")
-    print(Fore.CYAN + evaluation_prompt)
+    SLog.debug(LogCategory.LLM, LogEvent.REQUEST, {"purpose": "evaluation", "prompt_length": len(evaluation_prompt)}, "[evaluate_task_result] 評価プロンプトを生成")
 
     try:
         messages = [
@@ -392,13 +430,15 @@ async def evaluate_task_result(
         status = eval_struct.status
         reason = eval_struct.reason.strip()
 
-        color = Fore.GREEN if status == RESULT_PASS else Fore.RED
-        print(color + f"[evaluate_task_result] status={status}")
+        if status == RESULT_PASS:
+            SLog.info(LogCategory.LLM, LogEvent.RESPONSE, {"status": status}, f"[evaluate_task_result] status={status}")
+        else:
+            SLog.warn(LogCategory.LLM, LogEvent.RESPONSE, {"status": status}, f"[evaluate_task_result] status={status}")
 
         return f"{status}\n判定理由:\n{reason}"
     except Exception as e:
         err_type = type(e).__name__
-        print(Fore.RED + f"[evaluate_task_result] Exception: {err_type}: {e}")
+        SLog.error(LogCategory.LLM, LogEvent.FAIL, {"error_type": err_type, "error": str(e)}, f"[evaluate_task_result] Exception: {err_type}: {e}")
         allure.attach(
             f"Exception Type: {err_type}\nLocation: evaluate_task_result\nMessage: {e}",
             name="❌ evaluate_task_result Exception",
@@ -447,15 +487,11 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                 # Set each capability dynamically
                 options.set_capability(key, value)
     except FileNotFoundError:
-        print(
-            f"警告: {capabilities_path} が見つかりません。"
-        )
+        SLog.error(LogCategory.CONFIG, LogEvent.FAIL, {"path": capabilities_path}, f"警告: {capabilities_path} が見つかりません。")
         raise
 
     except json.JSONDecodeError:
-        print(
-            f"警告: {capabilities_path} のJSON形式が無効です。デフォルト設定で実行します。"
-        )
+        SLog.error(LogCategory.CONFIG, LogEvent.FAIL, {"path": capabilities_path}, f"警告: {capabilities_path} のJSON形式が無効です。")
         raise
 
     
@@ -487,28 +523,28 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
 * 別のアプリを起動する必要がある場合を除き、このアプリを操作してください
 """
                 knowhow = app_package_info + "\n" + knowhow
-                print(Fore.CYAN + f"テスト対象アプリ: {app_package} (knowhowに追加済み)")
+                SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"app_package": app_package}, f"テスト対象アプリ: {app_package} (knowhowに追加済み)")
             
             # noReset=True の場合、appPackageで指定されたアプリを強制起動
             if no_reset:
                 if app_package:
-                    print(Fore.CYAN + f"noReset=True: アプリを強制起動します (appPackage={app_package})")
+                    SLog.info(LogCategory.SESSION, LogEvent.START, {"app_package": app_package, "no_reset": True}, f"noReset=True: アプリを強制起動します (appPackage={app_package})")
                     try:
                         activate_result = await activate_app.ainvoke({"app_id": app_package})
-                        print(f"appium_activate_app結果: {activate_result}")
-                        print("アプリ起動待機中... (3秒)")
+                        SLog.debug(LogCategory.SESSION, LogEvent.COMPLETE, {"result": str(activate_result)}, None)
+                        SLog.info(LogCategory.SESSION, LogEvent.UPDATE, {"wait_seconds": 3}, "アプリ起動待機中... (3秒)")
                         await asyncio.sleep(3)
                     except Exception as e:
-                        print(Fore.YELLOW + f"⚠️  appium_activate_app実行エラー: {e}")
+                        SLog.warn(LogCategory.SESSION, LogEvent.FAIL, {"error": str(e)}, f"appium_activate_app実行エラー: {e}")
                 else:
-                    print(Fore.YELLOW + "⚠️  appPackageが指定されていないため、アプリ起動をスキップします")
+                    SLog.warn(LogCategory.SESSION, LogEvent.SKIP, {"reason": "no_app_package"}, "appPackageが指定されていないため、アプリ起動をスキップします")
             else:
                 # noReset=False の場合は通常通り待機のみ
-                print("アプリ起動待機中... (3秒)")
+                SLog.info(LogCategory.SESSION, LogEvent.UPDATE, {"wait_seconds": 3}, "アプリ起動待機中... (3秒)")
                 await asyncio.sleep(3)
 
             # 環境変数でモデル選択（動的に取得）
-            print(Fore.CYAN + f"使用モデル: {cfg.execution_model}")
+            SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"model": cfg.execution_model}, f"使用モデル: {cfg.execution_model}")
 
             # トークンカウンターコールバックを作成
             token_callback = TiktokenCountCallback(model=cfg.execution_model)
@@ -556,7 +592,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
 """
 
             agent_executor = create_agent(llm, appium_tools(), system_prompt=prompt)
-            print(Fore.CYAN + f"Agent Executor用モデル: {cfg.execution_model}")
+            SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"model": cfg.execution_model, "purpose": "agent_executor"}, f"Agent Executor用モデル: {cfg.execution_model}")
 
             planner = SimplePlanner(
                 knowhow, 
@@ -564,12 +600,9 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                 token_callback=token_callback
             )
 
-            # LLMに渡されるknowhow情報を表示
-            print(Fore.MAGENTA + "=" * 60)
-            print(Fore.MAGENTA + "【LLMに渡されるknowhow情報】")
-            print(Fore.MAGENTA + "=" * 60)
-            print(Fore.CYAN + knowhow)
-            print(Fore.MAGENTA + "=" * 60)
+            # LLMに渡されるknowhow情報を記録
+            SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"knowhow_length": len(knowhow)}, "LLMに渡されるknowhow情報を設定")
+            SLog.debug(LogCategory.CONFIG, LogEvent.UPDATE, {"knowhow": knowhow}, None)
 
             # ワークフロー関数を作成（セッション内のツールを使用）
             max_replan_count = 20
@@ -625,28 +658,28 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
                 app_package = capabilities.get("appium:appPackage")
                 dont_stop_app_on_reset = capabilities.get("appium:dontStopAppOnReset")
                 if app_package and not dont_stop_app_on_reset:
-                    print(Fore.CYAN + f"セッション終了: アプリを終了します (appPackage={app_package})")
+                    SLog.info(LogCategory.SESSION, LogEvent.END, {"app_package": app_package}, f"セッション終了: アプリを終了します (appPackage={app_package})")
                     try:
                         terminate_result = await terminate_app.ainvoke({"app_id": app_package})
-                        print(f"appium_terminate_app結果: {terminate_result}")
+                        SLog.debug(LogCategory.SESSION, LogEvent.COMPLETE, {"result": str(terminate_result)}, None)
                     except Exception as e:
                         error_msg = str(e)
                         # NoSuchDriverError や session terminated エラーは警告レベルで扱う
                         if "NoSuchDriverError" in error_msg or "session is either terminated or not started" in error_msg or "session" in error_msg.lower():
-                            print(Fore.YELLOW + f"⚠️  セッションが既に終了しています: {e}")
+                            SLog.warn(LogCategory.SESSION, LogEvent.SKIP, {"error": error_msg}, f"セッションが既に終了しています: {e}")
                         else:
-                            print(Fore.YELLOW + f"⚠️  appium_terminate_app実行エラー: {e}")
+                            SLog.warn(LogCategory.SESSION, LogEvent.FAIL, {"error": error_msg}, f"appium_terminate_app実行エラー: {e}")
 
     except Exception as e:
         error_msg = str(e)
         # NoSuchDriverError や session terminated エラーは情報レベルで扱う
         if "NoSuchDriverError" in error_msg or "session is either terminated or not started" in error_msg:
-            print(Fore.YELLOW + f"⚠️  agent_session: セッションが既に終了しています: {e}")
+            SLog.warn(LogCategory.SESSION, LogEvent.SKIP, {"error": error_msg}, f"agent_session: セッションが既に終了しています: {e}")
         else:
-            print(Fore.RED + f"agent_sessionでエラー: {e}")
+            SLog.error(LogCategory.SESSION, LogEvent.FAIL, {"error": error_msg}, f"agent_sessionでエラー: {e}")
             raise e
     finally:
-        print("セッション終了")
+        SLog.info(LogCategory.SESSION, LogEvent.END, None, "セッション終了")
 
 
 class SmartestiRoid:
@@ -688,19 +721,19 @@ class SmartestiRoid:
             inputs = {"input": task}
             
             if knowhow is not None:
-                print(Fore.YELLOW + f"カスタムknowhow情報を使用: {knowhow[:100]}...")
+                SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"custom_knowhow": True}, f"カスタムknowhow情報を使用: {knowhow[:100]}...")
 
-            print(Fore.CYAN + "=== Plan-and-Execute Agent 開始 ===")
+            SLog.info(LogCategory.TEST, LogEvent.START, {"agent": "plan_and_execute"}, "Plan-and-Execute Agent 開始")
             try:
                 final_result = {"response": ""}
                 async for event in graph.astream(inputs, config=config):
                     for k, v in event.items():
                         if k != "__end__":
-                            print(Fore.BLUE + str(v))
+                            SLog.debug(LogCategory.STEP, LogEvent.UPDATE, {"event": k, "value": str(v)[:200]}, None)
                             final_result = v
 
             except Exception as e:
-                print(Fore.RED + f"実行中にエラーが発生しました: {e}")
+                SLog.error(LogCategory.TEST, LogEvent.FAIL, {"error": str(e)}, f"実行中にエラーが発生しました: {e}")
                 allure.attach(
                     f"テスト実行中にエラーが発生しました:\n{e}",
                     name="❌ Test Execution Error",
@@ -708,7 +741,7 @@ class SmartestiRoid:
                 )
                 assert False, f"テスト実行中にエラーが発生しました: {e}"
             finally:
-                print(Fore.CYAN + "=== Plan-and-Execute Agent 終了 ===")
+                SLog.info(LogCategory.TEST, LogEvent.END, {"agent": "plan_and_execute"}, "Plan-and-Execute Agent 終了")
             # async forループは一度だけ実行されるのでbreakが不要
 
         # validation
@@ -717,15 +750,19 @@ class SmartestiRoid:
 
         # RESULT_SKIPが含まれている場合は、pytestでskipする
         if RESULT_SKIP in result_text:
+            SLog.log(LogCategory.TEST, LogEvent.SKIP, {"result": "SKIP"}, "⏭️ SKIP: このテストは出力結果の目視確認が必要です")
             pytest.skip("このテストは出力結果の目視確認が必要です")
 
         # RESULT_FAILが含まれている場合は、テスト失敗として処理
         if RESULT_FAIL in result_text:
+            SLog.log(LogCategory.TEST, LogEvent.FAIL, {"result": "FAIL"}, "❌ FAIL: テストが失敗しました")
             # 詳細はworkflow.pyでAllureに添付済みなので、ここでは添付しない
             pytest.fail(f"テストが失敗しました:\n{result_text}")
 
         # RESULT_PASSが含まれているか確認
         if RESULT_PASS.lower() not in result_text.lower():
+            SLog.log(LogCategory.TEST, LogEvent.FAIL, {"result": "FAIL"}, "❌ FAIL: テストが失敗しました（PASSが含まれていない）")
             pytest.fail(f"テストが失敗しました:\n{result_text}")
         
+        SLog.log(LogCategory.TEST, LogEvent.COMPLETE, {"result": "PASS"}, "✅ PASS: テストが成功しました")
         return result_text

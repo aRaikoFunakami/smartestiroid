@@ -1,12 +1,11 @@
 import pytest
 import allure
-from colorama import Fore, init
 from .conftest import SmartestiRoid, agent_session
+from .utils.structured_logger import SLog, LogCategory, LogEvent
 import pandas as pd
 import sys
 import os
 
-init(autoreset=True)
 
 # パッケージのルートディレクトリ
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -92,10 +91,14 @@ def create_test_function(case, test_num):
 
         # Execute steps via your agent
         with allure.step(title):
-            print(Fore.YELLOW + f"=== テストケース: {title} (ID={cid}) ===")
-            print(Fore.YELLOW + f"Reset設定: {reset_value} → appium:noReset={no_reset}")
-            print(Fore.YELLOW + f"タスク: {steps}")
-            print(Fore.YELLOW + f"期待される基準: {expected}")
+            SLog.log(LogCategory.TEST, LogEvent.START, {
+                "test_id": cid,
+                "title": title,
+                "reset_value": reset_value,
+                "no_reset": no_reset,
+                "steps": steps,
+                "expected": expected
+            }, f"=== テストケース: {title} (ID={cid}) ===")
             
             # カスタムknowhowを使用してエージェントを作成
             agent = SmartestiRoid(agent_session, no_reset, dont_stop_app_on_reset, knowhow=custom_knowhow)
@@ -103,7 +106,9 @@ def create_test_function(case, test_num):
                 steps=steps,
                 expected=expected,
             )
-            print(Fore.MAGENTA + f"最終応答: {agent_response}")
+            SLog.log(LogCategory.TEST, LogEvent.COMPLETE, {
+                "response": str(agent_response)
+            }, f"最終応答: {agent_response}")
             
             # テスト完了ログ（JSON形式で統一）
             progress_done = json.dumps({

@@ -8,11 +8,11 @@ from typing import Dict, Any, List, Optional
 import json
 import time
 import allure
-from colorama import Fore
 from langchain_core.callbacks import BaseCallbackHandler
 
 from ..config import OPENAI_TIMEOUT
 from ..progress import ToolCallRecord, StepExecutionRecord, ExecutionProgress, ObjectiveProgress
+from .structured_logger import SLog, LogCategory, LogEvent
 
 
 class AllureToolCallbackHandler(BaseCallbackHandler):
@@ -149,8 +149,10 @@ class AllureToolCallbackHandler(BaseCallbackHandler):
             )
             self._current_step_record.tool_calls.append(tool_record)
         
-        print(Fore.YELLOW + f"🔧 Tool Start: {tool_name}")
-        print(Fore.YELLOW + f"   Input: {input_display[:200]}...")
+        SLog.log(LogCategory.TOOL, LogEvent.START, {
+            "tool_name": tool_name,
+            "input": input_display[:200]
+        }, f"🔧 Tool Start: {tool_name}")
     
     def on_tool_end(self, output: str, **kwargs) -> None:
         """ツール呼び出し終了時"""
@@ -161,8 +163,11 @@ class AllureToolCallbackHandler(BaseCallbackHandler):
             tool_call["output"] = str(output) if output is not None else None
             
             elapsed = tool_call["end_time"] - tool_call["start_time"]
-            print(Fore.GREEN + f"✅ Tool End: {tool_call['tool_name']} ({elapsed:.2f}s)")
-            print(Fore.GREEN + f"   Output: {str(output)[:200]}...")
+            SLog.log(LogCategory.TOOL, LogEvent.COMPLETE, {
+                "tool_name": tool_call['tool_name'],
+                "elapsed": f"{elapsed:.2f}s",
+                "output": str(output)[:200]
+            }, f"✅ Tool End: {tool_call['tool_name']} ({elapsed:.2f}s)")
         
         # 進捗追跡用のレコードも更新
         if self._current_step_record and self._current_step_record.tool_calls:
@@ -178,8 +183,11 @@ class AllureToolCallbackHandler(BaseCallbackHandler):
             tool_call["error"] = str(error)
             
             elapsed = tool_call["end_time"] - tool_call["start_time"]
-            print(Fore.RED + f"❌ Tool Error: {tool_call['tool_name']} ({elapsed:.2f}s)")
-            print(Fore.RED + f"   Error: {str(error)[:200]}...")
+            SLog.log(LogCategory.TOOL, LogEvent.FAIL, {
+                "tool_name": tool_call['tool_name'],
+                "elapsed": f"{elapsed:.2f}s",
+                "error": str(error)[:200]
+            }, f"❌ Tool Error: {tool_call['tool_name']} ({elapsed:.2f}s)")
         
         # 進捗追跡用のレコードも更新
         if self._current_step_record and self._current_step_record.tool_calls:
@@ -241,7 +249,11 @@ def log_openai_timeout_to_allure(location: str, model: str, elapsed: float, cont
         for key, value in context.items():
             error_details += f"\n- {key}: {value}"
     
-    print(Fore.RED + f"❌ OpenAI API タイムアウト in {location}: {elapsed:.2f}秒")
+    SLog.error({
+        "location": location,
+        "elapsed": f"{elapsed:.2f}s",
+        "model": model
+    }, f"❌ OpenAI API タイムアウト in {location}: {elapsed:.2f}秒")
     
     allure.attach(
         error_details,
@@ -274,15 +286,15 @@ def log_openai_error_to_allure(error_type: str, location: str, model: str, error
         for key, value in context.items():
             error_details += f"\n- {key}: {value}"
     
-    # エラー種別に応じた色分け
+    # エラー種別に応じたログ出力
     if error_type == "RateLimitError":
-        print(Fore.YELLOW + f"⚠️  OpenAI API レート制限 in {location}")
+        SLog.warn({"location": location}, f"⚠️  OpenAI API レート制限 in {location}")
     elif error_type == "AuthenticationError":
-        print(Fore.RED + f"🔐 OpenAI API 認証エラー in {location}")
+        SLog.error({"location": location}, f"🔐 OpenAI API 認証エラー in {location}")
     elif error_type == "APIConnectionError":
-        print(Fore.YELLOW + f"🌐 OpenAI API 接続エラー in {location}")
+        SLog.warn({"location": location}, f"🌐 OpenAI API 接続エラー in {location}")
     else:
-        print(Fore.RED + f"❌ OpenAI API エラー ({error_type}) in {location}")
+        SLog.error({"location": location, "error_type": error_type}, f"❌ OpenAI API エラー ({error_type}) in {location}")
     
     allure.attach(
         error_details,

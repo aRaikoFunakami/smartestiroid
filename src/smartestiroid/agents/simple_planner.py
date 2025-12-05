@@ -7,7 +7,6 @@ This module provides a plan-and-execute agent with multi-stage replanning.
 import pytest
 from typing import Optional
 from pydantic import BaseModel, Field
-from colorama import Fore
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 import allure
@@ -20,6 +19,7 @@ from ..config import (
 )
 from .multi_stage_replanner import MultiStageReplanner
 from ..utils.allure_logger import log_openai_error_to_allure
+from ..utils.structured_logger import SLog, LogCategory, LogEvent
 
 
 class ScreenAnalysis(BaseModel):
@@ -49,7 +49,9 @@ class SimplePlanner:
         
         # Multi-stage用のreplanner初期化（token_callbackを渡す）
         self.replanner = MultiStageReplanner(self.llm, knowhow, token_callback)
-        print(Fore.CYAN + f"🔀 Multi-stage replan モード有効 (model: {model_name})")
+        SLog.log(LogCategory.CONFIG, LogEvent.START, {
+            "model": model_name
+        }, "🔀 Multi-stage replan モード有効")
 
     async def analyze_screen(
         self, locator: str, image_url: str, goal: str = ""
@@ -100,18 +102,28 @@ class SimplePlanner:
             ])
         ]
         
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "analyze_screen",
+            "model": self.model_name,
+            "system_prompt": system_prompt,
+            "user_prompt": human_message
+        }, "LLMプロンプト送信: analyze_screen")
+
         try:
             structured_llm = self.llm.with_structured_output(ScreenAnalysis)
             
             with self.token_callback.track_query():
                 analysis = await structured_llm.ainvoke(messages)
             
-            print(Fore.CYAN + f"[analyze_screen] 画面分析完了: {analysis.screen_type}")
+            SLog.log(LogCategory.SCREEN, LogEvent.COMPLETE, {
+                "screen_type": analysis.screen_type
+            }, "画面分析完了")
             return analysis
             
         except Exception as e:
             err_type = type(e).__name__
-            print(Fore.RED + f"[analyze_screen] Exception: {err_type}: {e}")
+            SLog.error({"error_type": err_type, "error": str(e)}, "analyze_screen Exception")
             # フォールバック: 基本的な分析結果を返す
             return ScreenAnalysis(
                 screen_type="不明",
@@ -175,15 +187,23 @@ class SimplePlanner:
 （※ 確認項目は除外、動作指示形で書く）
 """
         
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "parse_objective_steps",
+            "model": self.model_name,
+            "prompt": prompt
+        }, "LLMプロンプト送信: parse_objective_steps")
+
         try:
             structured_llm = self.llm.with_structured_output(ParsedObjectiveSteps)
             
             with self.token_callback.track_query():
                 result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
             
-            print(Fore.CYAN + f"[parse_objective_steps] 目標ステップ解析完了: {len(result.steps)}ステップ")
-            for i, step in enumerate(result.steps):
-                print(Fore.CYAN + f"  [{i}] {step}")
+            SLog.log(LogCategory.OBJECTIVE, LogEvent.COMPLETE, {
+                "step_count": len(result.steps),
+                "steps": result.steps
+            }, f"目標ステップ解析完了: {len(result.steps)}ステップ")
             
             # ObjectiveProgressを構築
             objective_steps = [
@@ -210,7 +230,7 @@ class SimplePlanner:
             
         except Exception as e:
             err_type = type(e).__name__
-            print(Fore.RED + f"[parse_objective_steps] Exception: {err_type}: {e}")
+            SLog.error({"error_type": err_type, "error": str(e)}, "parse_objective_steps Exception")
             # フォールバック: 入力全体を1つの目標として扱う
             return ObjectiveProgress(
                 original_input=user_input,
@@ -284,21 +304,30 @@ class SimplePlanner:
                 {"type": "image_url", "image_url": {"url": image_url}}
             ])]
         
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "create_execution_plan_for_objective",
+            "model": self.model_name,
+            "prompt": prompt,
+            "has_image": bool(image_url)
+        }, "LLMプロンプト送信: create_execution_plan_for_objective")
+
         try:
             structured_llm = self.llm.with_structured_output(Plan)
             
             with self.token_callback.track_query():
                 plan = await structured_llm.ainvoke(messages)
             
-            print(Fore.CYAN + f"[create_execution_plan_for_objective] 実行計画生成完了: {len(plan.steps)}アクション")
-            for i, step in enumerate(plan.steps):
-                print(Fore.CYAN + f"  [{i}] {step}")
+            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
+                "action_count": len(plan.steps),
+                "steps": plan.steps
+            }, f"実行計画生成完了: {len(plan.steps)}アクション")
             
             return plan
             
         except Exception as e:
             err_type = type(e).__name__
-            print(Fore.RED + f"[create_execution_plan_for_objective] Exception: {err_type}: {e}")
+            SLog.error({"error_type": err_type, "error": str(e)}, "create_execution_plan_for_objective Exception")
             return Plan(steps=[f"目標「{objective_step.description}」を達成する"])
 
     async def evaluate_objective_completion(
@@ -358,6 +387,14 @@ class SimplePlanner:
                 {"type": "image_url", "image_url": {"url": image_url}}
             ])]
         
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "evaluate_objective_completion",
+            "model": self.model_name,
+            "prompt": prompt,
+            "has_image": bool(image_url)
+        }, "LLMプロンプト送信: evaluate_objective_completion")
+
         try:
             structured_llm = self.llm.with_structured_output(ObjectiveStepResult)
             
@@ -365,13 +402,16 @@ class SimplePlanner:
                 result = await structured_llm.ainvoke(messages)
             
             status_icon = "✅" if result.achieved else "❌"
-            print(Fore.CYAN + f"[evaluate_objective_completion] {status_icon} 目標「{objective_step.description[:30]}...」: {'達成' if result.achieved else '未達成'}")
+            SLog.log(LogCategory.OBJECTIVE, LogEvent.COMPLETE if result.achieved else LogEvent.FAIL, {
+                "objective": objective_step.description[:30],
+                "achieved": result.achieved
+            }, f"{status_icon} 目標「{objective_step.description[:30]}...」: {'達成' if result.achieved else '未達成'}")
             
             return result
             
         except Exception as e:
             err_type = type(e).__name__
-            print(Fore.RED + f"[evaluate_objective_completion] Exception: {err_type}: {e}")
+            SLog.error({"error_type": err_type, "error": str(e)}, "evaluate_objective_completion Exception")
             return ObjectiveStepResult(
                 achieved=False,
                 evidence=f"評価エラー: {e}"
@@ -423,6 +463,14 @@ class SimplePlanner:
                 {"type": "image_url", "image_url": {"url": image_url}}
             ])]
         
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "create_recovery_plan",
+            "model": self.model_name,
+            "prompt": prompt,
+            "has_image": bool(image_url)
+        }, "LLMプロンプト送信: create_recovery_plan")
+
         try:
             structured_llm = self.llm.with_structured_output(Plan)
             
@@ -430,13 +478,15 @@ class SimplePlanner:
                 plan = await structured_llm.ainvoke(messages)
             
             description = f"障害物を回避: {blocking_reason[:50]}..."
-            print(Fore.YELLOW + f"[create_recovery_plan] Recovery計画生成: {len(plan.steps)}アクション")
+            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
+                "action_count": len(plan.steps)
+            }, f"Recovery計画生成: {len(plan.steps)}アクション")
             
             return description, plan.steps
             
         except Exception as e:
             err_type = type(e).__name__
-            print(Fore.RED + f"[create_recovery_plan] Exception: {err_type}: {e}")
+            SLog.error({"error_type": err_type, "error": str(e)}, "create_recovery_plan Exception")
             return f"障害物を回避: {blocking_reason[:30]}...", ["障害物を閉じる"]
 
     async def replan(
@@ -466,13 +516,16 @@ class SimplePlanner:
         # Multi-stage replan処理
         try:
             # ★ デバッグ用ウェイト ★
-            print(Fore.CYAN + "⏳ Replan前の待機中... (3秒)")
+            SLog.log(LogCategory.REPLAN, LogEvent.START, {}, "⏳ Replan前の待機中... (3秒)")
             time.sleep(3)
 
             # ★ 画面不整合時の再チェックループ ★
             retry_count = 0
             while True:
-                print(Fore.CYAN + f"🔀 Multi-stage replan: STAGE 1（State Analysis）[model: {self.model_name}]")
+                SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {
+                    "stage": 1,
+                    "model": self.model_name
+                }, "🔀 Multi-stage replan: STAGE 1（State Analysis）")
                 state_analysis = await self.replanner.analyze_state(
                     goal=state["input"],
                     original_plan=state["plan"],
@@ -487,8 +540,12 @@ class SimplePlanner:
                 if state_analysis.has_screen_inconsistency():
                     retry_count += 1
                     if retry_count <= SCREEN_INCONSISTENCY_MAX_RETRIES:
-                        print(Fore.YELLOW + f"⚠️ 画面不整合を検出: {state_analysis.screen_inconsistency}")
-                        print(Fore.YELLOW + f"⏳ {SCREEN_INCONSISTENCY_WAIT_SEC}秒待機して再チェックします... (リトライ {retry_count}/{SCREEN_INCONSISTENCY_MAX_RETRIES})")
+                        SLog.warn({
+                            "screen_inconsistency": state_analysis.screen_inconsistency,
+                            "retry_count": retry_count,
+                            "max_retries": SCREEN_INCONSISTENCY_MAX_RETRIES,
+                            "wait_sec": SCREEN_INCONSISTENCY_WAIT_SEC
+                        }, f"⚠️ 画面不整合を検出、{SCREEN_INCONSISTENCY_WAIT_SEC}秒待機して再チェック")
                         time.sleep(SCREEN_INCONSISTENCY_WAIT_SEC)
                         
                         # 画面情報を再取得（LangChainツールなので.invoke()で呼び出し）
@@ -499,8 +556,10 @@ class SimplePlanner:
                     else:
                         # リトライ上限到達 → テスト失敗
                         error_msg = f"画面不整合が{retry_count}回のリトライ後も解消されませんでした。\n詳細: {state_analysis.screen_inconsistency}"
-                        print(Fore.RED + f"❌ 画面不整合が解消されません（{retry_count}回リトライ後）")
-                        print(Fore.RED + f"   詳細: {state_analysis.screen_inconsistency}")
+                        SLog.error({
+                            "retry_count": retry_count,
+                            "screen_inconsistency": state_analysis.screen_inconsistency
+                        }, "❌ 画面不整合が解消されません（リトライ上限到達）")
                         allure.attach(
                             error_msg,
                             name="❌ 画面不整合（リトライ上限到達）",
@@ -510,7 +569,9 @@ class SimplePlanner:
                 else:
                     # 正常（不整合なし）
                     if retry_count > 0:
-                        print(Fore.GREEN + f"✅ 画面不整合が解消されました（{retry_count}回目のリトライで成功）")
+                        SLog.log(LogCategory.SCREEN, LogEvent.COMPLETE, {
+                            "retry_count": retry_count
+                        }, f"✅ 画面不整合が解消されました（{retry_count}回目のリトライで成功）")
                     break  # 正常に続行
             
             # ★ ダイアログ処理モードの切り替え ★
@@ -520,14 +581,12 @@ class SimplePlanner:
                     objective_progress.enter_dialog_handling_mode()
                     current_step = objective_progress.get_current_step()
                     remaining = objective_progress.get_current_remaining_plan()
-                    print(Fore.YELLOW + "=" * 60)
-                    print(Fore.YELLOW + "🔒 [replan] ダイアログ処理モード開始")
-                    print(Fore.YELLOW + f"   検出: {state_analysis.blocking_dialogs}")
-                    print(Fore.YELLOW + f"   凍結する通常計画: {len(remaining)}ステップ残り")
-                    print(Fore.YELLOW + f"   復帰先の目標: [{current_step.index}] {current_step.description[:50]}...")
-                    if remaining:
-                        print(Fore.YELLOW + f"   ⮩ 停止位置: [{current_step.execution_plan_index + 1}/{len(current_step.execution_plan)}] {remaining[0][:60]}...")
-                    print(Fore.YELLOW + "=" * 60)
+                    SLog.log(LogCategory.DIALOG, LogEvent.START, {
+                        "blocking_dialogs": state_analysis.blocking_dialogs,
+                        "frozen_steps": len(remaining),
+                        "target_objective": {"index": current_step.index, "description": current_step.description[:50]},
+                        "stop_position": remaining[0][:60] if remaining else None
+                    }, "🔒 ダイアログ処理モード開始")
             else:
                 # ブロッキングダイアログなし → モードから抜ける
                 if objective_progress.is_handling_dialog():
@@ -535,13 +594,11 @@ class SimplePlanner:
                     objective_progress.exit_dialog_handling_mode()
                     remaining = objective_progress.get_current_remaining_plan()
                     current_step = objective_progress.get_current_step()
-                    print(Fore.GREEN + "=" * 60)
-                    print(Fore.GREEN + "🔓 [replan] ダイアログ処理モード終了 → 通常処理に復帰")
-                    print(Fore.GREEN + f"   ダイアログ処理で実行したステップ数: {dialog_count}")
-                    print(Fore.GREEN + f"   凍結解除: 残り{len(remaining)}ステップから再開")
-                    if remaining:
-                        print(Fore.GREEN + f"   ⮩ 再開位置: [{current_step.execution_plan_index + 1}/{len(current_step.execution_plan)}] {remaining[0][:60]}...")
-                    print(Fore.GREEN + "=" * 60)
+                    SLog.log(LogCategory.DIALOG, LogEvent.END, {
+                        "dialog_steps_executed": dialog_count,
+                        "remaining_steps": len(remaining),
+                        "resume_position": remaining[0][:60] if remaining else None
+                    }, "🔓 ダイアログ処理モード終了 → 通常処理に復帰")
             
             # 全目標達成判定
             all_objectives_completed = objective_progress.is_all_objectives_completed()
@@ -564,10 +621,12 @@ class SimplePlanner:
 全ての目標ステップ達成: {"Yes" if all_objectives_completed else "No"}
 次のアクション提案: {state_analysis.suggested_next_action or "なし"}
 """
-            print(Fore.CYAN + f"状態分析結果:\n{state_summary}")
+            SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
+                "state_summary": state_summary
+            }, "状態分析結果")
             allure.attach(state_summary, name=f"🔍 State Analysis Results [model: {self.model_name}]", attachment_type=allure.attachment_type.TEXT)
             
-            print(Fore.CYAN + "🔀 Multi-stage replan: STAGE 2（Action Decision）")
+            SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {"stage": 2}, "🔀 Multi-stage replan: STAGE 2（Action Decision）")
             decision, reason = await self.replanner.decide_action(
                 goal=state["input"],
                 original_plan=state["plan"],
@@ -575,20 +634,26 @@ class SimplePlanner:
                 state_analysis=state_analysis,
                 objective_progress=objective_progress
             )
-            print(Fore.CYAN + f"判定結果: {decision}\n理由: {reason}")
+            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
+                "decision": decision,
+                "reason": reason
+            }, f"判定結果: {decision}")
             allure.attach(f"DECISION: {decision}\n{reason}", name=f"⚖️ Action Decision [model: {self.model_name}]", attachment_type=allure.attachment_type.TEXT)
             
-            print(Fore.CYAN + "🔀 Multi-stage replan: STAGE 3（Output Generation）")
+            SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {"stage": 3}, "🔀 Multi-stage replan: STAGE 3（Output Generation）")
             if decision == "RESPONSE":
                 # RESPONSE判定 = テスト終了（成功または失敗）
-                print(Fore.CYAN + "  → RESPONSE分岐に入りました。build_response()を呼び出します...")
+                SLog.log(LogCategory.REPLAN, LogEvent.UPDATE, {}, "→ RESPONSE分岐に入りました。build_response()を呼び出します...")
                 
                 # 目標進捗を更新（RESPONSEが返される = 現在の目標が達成または終了）
                 if state_analysis.current_objective_achieved:
                     current_step = objective_progress.get_current_step()
                     if current_step.status != "completed":
                         evidence = state_analysis.current_objective_evidence or "状態分析により達成確認"
-                        print(Fore.GREEN + f"✅ [Planner] 目標ステップ完了: [{current_step.index}] {current_step.description[:50]}...")
+                        SLog.log(LogCategory.OBJECTIVE, LogEvent.ACHIEVED, {
+                            "index": current_step.index,
+                            "description": current_step.description[:50]
+                        }, f"✅ 目標ステップ完了: [{current_step.index}]")
                         objective_progress.mark_current_completed(evidence=evidence)
                 
                 try:
@@ -598,7 +663,10 @@ class SimplePlanner:
                         state_analysis=state_analysis,
                         objective_progress=objective_progress
                     )
-                    print(Fore.GREEN + f"✅ Response生成完了: [{response.status}] {response.reason[:100]}...")
+                    SLog.log(LogCategory.TEST, LogEvent.COMPLETE, {
+                        "status": response.status,
+                        "reason": response.reason[:100]
+                    }, f"✅ Response生成完了: [{response.status}]")
                     allure.attach(
                         f"Status: {response.status}\n\nReason:\n{response.reason}",
                         name="📋 Build Response Result",
@@ -611,7 +679,7 @@ class SimplePlanner:
                         current_objective_evidence=state_analysis.current_objective_evidence
                     )
                 except Exception as build_err:
-                    print(Fore.RED + f"❌ build_response()でエラー: {build_err}")
+                    SLog.error({"error": str(build_err)}, "❌ build_response()でエラー")
                     allure.attach(f"build_response error: {build_err}", name="❌ build_response Error", attachment_type=allure.attachment_type.TEXT)
                     raise
             else:
@@ -621,14 +689,20 @@ class SimplePlanner:
                     current_step = objective_progress.get_current_step()
                     if current_step.status != "completed":
                         evidence = state_analysis.current_objective_evidence or "状態分析により達成確認"
-                        print(Fore.GREEN + f"✅ [Planner] 目標ステップ完了: [{current_step.index}] {current_step.description[:50]}...")
+                        SLog.log(LogCategory.OBJECTIVE, LogEvent.ACHIEVED, {
+                            "index": current_step.index,
+                            "description": current_step.description[:50]
+                        }, f"✅ 目標ステップ完了: [{current_step.index}]")
                         objective_progress.mark_current_completed(evidence=evidence)
                         
                         # 次の目標に進む
                         has_next = objective_progress.advance_to_next_objective()
                         if has_next:
                             next_objective = objective_progress.get_current_step()
-                            print(Fore.CYAN + f"🎯 [Planner] 次の目標ステップに進みます: [{next_objective.index}] {next_objective.description[:50]}...")
+                            SLog.log(LogCategory.OBJECTIVE, LogEvent.CHANGE, {
+                                "index": next_objective.index,
+                                "description": next_objective.description[:50]
+                            }, f"🎯 次の目標ステップに進みます: [{next_objective.index}]")
                 
                 # 現在の目標（または次の目標）に対する計画を作成
                 plan = await self.replanner.build_plan(
@@ -639,7 +713,9 @@ class SimplePlanner:
                     objective_progress=objective_progress,
                     locator=locator  # ブロッキングダイアログ処理用にロケーター情報を渡す
                 )
-                print(Fore.YELLOW + f"📋 Plan生成完了: {len(plan.steps)}ステップ")
+                SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
+                    "step_count": len(plan.steps)
+                }, f"📋 Plan生成完了: {len(plan.steps)}ステップ")
                 return Act(
                     action=plan,
                     state_analysis=state_summary,
@@ -648,13 +724,13 @@ class SimplePlanner:
                 )
         
         except Exception as e:
-            print(Fore.RED + f"⚠️ Multi-stage replan エラー: {e}")
+            SLog.error({"error": str(e)}, "⚠️ Multi-stage replan エラー")
             allure.attach(f"Multi-stage replan error: {e}", name="❌ Multi-stage error", attachment_type=allure.attachment_type.TEXT)
             # フォールバック: 残りのステップを返す
             remaining_steps = state["plan"][len(state["past_steps"]):]
             if remaining_steps:
                 fallback_plan = Plan(steps=remaining_steps)
-                print(Fore.YELLOW + f"🔄 フォールバック: 残り{len(remaining_steps)}ステップを返却")
+                SLog.warn({"remaining_steps": len(remaining_steps)}, f"🔄 フォールバック: 残り{len(remaining_steps)}ステップを返却")
                 return Act(action=fallback_plan)
             else:
                 fallback_response = Response(status=RESULT_PASS, reason=f"エラー発生のため処理を中断します: {e}")

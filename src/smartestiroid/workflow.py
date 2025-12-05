@@ -6,7 +6,6 @@ Plan-Executeパターンのワークフロー関数を提供します。
 import base64
 from enum import Enum
 import allure
-from colorama import Fore
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END
 
@@ -17,6 +16,7 @@ from .config import KNOWHOW_INFO, RESULT_PASS, RESULT_FAIL
 # 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
 from . import config as cfg
 from .utils import AllureToolCallbackHandler
+from .utils.structured_logger import SLog, LogCategory, LogEvent
 
 
 class FailureType(Enum):
@@ -461,7 +461,7 @@ def create_workflow_functions(
                 await asyncio.sleep(3)
 
                 log_text = f"ステップ '{task}' のエージェント応答: {agent_response['messages'][-1].content}"
-                print(Fore.RED + log_text)
+                SLog.debug(LogCategory.STEP, LogEvent.RESPONSE, {"step": task, "response": agent_response['messages'][-1].content[:500]}, None)
                 allure.attach(
                     task,
                     name=f"Step [model: {cfg.execution_model}]",
@@ -478,7 +478,7 @@ def create_workflow_functions(
                 )
                 
                 # === Phase 1: Executor自己評価 ===
-                print(Fore.CYAN + f"🔍 Phase 1: ステップ実行結果を評価中...")
+                SLog.info(LogCategory.LLM, LogEvent.VERIFY_REQUEST, {"phase": 1, "step": task}, "Phase 1: ステップ実行結果を評価中...")
                 tool_calls_summary = tool_callback.get_summary() if hasattr(tool_callback, 'get_summary') else "N/A"
                 
                 evaluation_result = await evaluate_step_execution(
@@ -489,7 +489,7 @@ def create_workflow_functions(
                     token_callback=token_callback
                 )
                 
-                print(Fore.CYAN + f"  📊 Executor評価: success={evaluation_result.success}, reason={evaluation_result.reason[:100]}...")
+                SLog.info(LogCategory.LLM, LogEvent.VERIFY_RESPONSE, {"phase": 1, "success": evaluation_result.success, "reason": evaluation_result.reason[:100]}, f"Executor評価: success={evaluation_result.success}")
                 allure.attach(
                     f"success: {evaluation_result.success}\nreason: {evaluation_result.reason}\nexecuted_action: {evaluation_result.executed_action}\nexpected_screen_change: {evaluation_result.expected_screen_change}\nno_page_source_change: {evaluation_result.no_page_source_change}",
                     name="📊 Phase 1: Executor Self-Evaluation",
@@ -501,7 +501,7 @@ def create_workflow_functions(
                 verification_result = None
                 
                 if evaluation_result.success:
-                    print(Fore.CYAN + f"🔍 Phase 2: 検証LLMによる独立検証中...")
+                    SLog.info(LogCategory.LLM, LogEvent.VERIFY_REQUEST, {"phase": 2, "step": task}, "Phase 2: 検証LLMによる独立検証中...")
                     
                     # 実行後の画面状態を取得
                     page_source_after = await get_page_source_tool.ainvoke({})
@@ -516,7 +516,7 @@ def create_workflow_functions(
                         token_callback=token_callback
                     )
                     
-                    print(Fore.CYAN + f"  ✅ 検証結果: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
+                    SLog.info(LogCategory.LLM, LogEvent.VERIFY_RESPONSE, {"phase": 2, "verified": verification_result.verified, "confidence": verification_result.confidence}, f"検証結果: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
                     allure.attach(
                         f"verified: {verification_result.verified}\nconfidence: {verification_result.confidence}\nreason: {verification_result.reason}\ndiscrepancy: {verification_result.discrepancy or 'None'}",
                         name="✅ Phase 2: Independent Verification",
@@ -527,11 +527,9 @@ def create_workflow_functions(
                     step_success = verification_result.verified and verification_result.confidence >= 0.7
                     
                     if not step_success:
-                        print(Fore.YELLOW + f"  ⚠️ 検証失敗: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
-                        if verification_result.discrepancy:
-                            print(Fore.YELLOW + f"  矛盾点: {verification_result.discrepancy}")
+                        SLog.warn(LogCategory.LLM, LogEvent.VERIFY_RESPONSE, {"verified": verification_result.verified, "confidence": verification_result.confidence, "discrepancy": verification_result.discrepancy}, f"検証失敗: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
                 else:
-                    print(Fore.YELLOW + f"  ⚠️ Executor評価が失敗のため、検証をスキップ")
+                    SLog.warn(LogCategory.LLM, LogEvent.SKIP, {"reason": "executor_evaluation_failed"}, "Executor評価が失敗のため、検証をスキップ")
                     step_success = False
                 
                 # ステップ完了を記録（評価結果に基づく）
@@ -550,7 +548,10 @@ def create_workflow_functions(
                 
                 # 最終的な成功/失敗を記録
                 final_status = "✅ SUCCESS" if step_success else "❌ FAILED"
-                print(Fore.GREEN + f"  {final_status}: ステップ '{task}'")
+                if step_success:
+                    SLog.info(LogCategory.STEP, LogEvent.COMPLETE, {"step": task, "success": True}, f"SUCCESS: ステップ '{task}'")
+                else:
+                    SLog.warn(LogCategory.STEP, LogEvent.FAIL, {"step": task, "success": False}, f"FAILED: ステップ '{task}'")
                 allure.attach(
                     f"Status: {final_status}\nPhase1 (Executor): success={evaluation_result.success}\nPhase2 (Verification): verified={verification_result.verified if verification_result else 'N/A'}, confidence={verification_result.confidence if verification_result else 'N/A'}",
                     name=f"{final_status} Step Result",
@@ -594,13 +595,12 @@ def create_workflow_functions(
                         # ダイアログ処理中 → execution_plan_indexは進めない
                         objective_progress_cache["progress"].increment_dialog_handling_count()
                         dialog_count = objective_progress_cache["progress"].get_dialog_handling_count()
-                        print(Fore.YELLOW + f"🔒 [execute_step] ダイアログ処理ステップ完了 (計{dialog_count}ステップ)")
-                        print(Fore.YELLOW + f"   通常計画は凍結中（indexは進めない）")
+                        SLog.info(LogCategory.STEP, LogEvent.COMPLETE, {"mode": "dialog", "dialog_count": dialog_count}, f"ダイアログ処理ステップ完了 (計{dialog_count}ステップ)")
                     else:
                         # 通常モード → execution_plan_indexを進める
                         objective_progress_cache["progress"].advance_current_execution_plan()
                         remaining = len(objective_progress_cache["progress"].get_current_remaining_plan())
-                        print(Fore.CYAN + f"📋 [execute_step] 通常ステップ完了 (残り: {remaining}ステップ)")
+                        SLog.info(LogCategory.STEP, LogEvent.COMPLETE, {"mode": "normal", "remaining": remaining}, f"通常ステップ完了 (残り: {remaining}ステップ)")
                 elif not step_success:
                     # 失敗した場合もアクション履歴を記録（失敗として）
                     if objective_progress_cache["progress"]:
@@ -615,7 +615,7 @@ def create_workflow_functions(
                                 result=f"FAILED: {evaluation_result.reason}",
                                 success=False
                             ))
-                    print(Fore.YELLOW + f"⚠️ ステップ失敗のため、計画を進めません。リプランが必要です。")
+                    SLog.warn(LogCategory.STEP, LogEvent.FAIL, {"step": task, "reason": evaluation_result.reason}, "ステップ失敗のため、計画を進めません。リプランが必要です。")
 
                 return {
                     "past_steps": [(task, agent_response["messages"][-1].content)],
@@ -625,7 +625,7 @@ def create_workflow_functions(
                 }
             except Exception as e:
                 error_msg = str(e)
-                print(Fore.RED + f"execute_stepでエラー: {e}")
+                SLog.error(LogCategory.STEP, LogEvent.FAIL, {"step": task, "error": error_msg}, f"execute_stepでエラー: {e}")
                 
                 # ステップ失敗を記録
                 tool_callback.complete_step(f"Error: {error_msg}", success=False)
@@ -694,7 +694,8 @@ def create_workflow_functions(
                 
                 # 目標ステップをログ出力
                 objective_summary = objective_progress.get_progress_summary()
-                print(Fore.GREEN + f"📋 目標ステップ解析完了:\n{objective_summary}")
+                SLog.info(LogCategory.OBJECTIVE, LogEvent.START, {"objectives_count": len(objective_progress.objective_steps)}, f"目標ステップ解析完了: {len(objective_progress.objective_steps)}個")
+                SLog.debug(LogCategory.OBJECTIVE, LogEvent.UPDATE, {"summary": objective_summary}, None)
                 allure.attach(
                     objective_summary,
                     name="📋 Objective Steps (User Goals)",
@@ -712,11 +713,7 @@ def create_workflow_functions(
                 # blocking_dialogsがある場合はダイアログ処理モードに入り、
                 # 通常計画は生成せずにダイアログ処理のみを行う
                 if screen_analysis.blocking_dialogs:
-                    print(Fore.YELLOW + "=" * 60)
-                    print(Fore.YELLOW + "🔒 [plan_step] ブロッキングダイアログ検出")
-                    print(Fore.YELLOW + f"   検出: {screen_analysis.blocking_dialogs}")
-                    print(Fore.YELLOW + f"   通常計画の生成をスキップし、ダイアログ処理モードへ")
-                    print(Fore.YELLOW + "=" * 60)
+                    SLog.warn(LogCategory.SCREEN, LogEvent.INCONSISTENCY_DETECTED, {"blocking_dialogs": screen_analysis.blocking_dialogs}, f"ブロッキングダイアログ検出: {screen_analysis.blocking_dialogs}")
                     
                     # ダイアログ処理モードに入る
                     objective_progress.enter_dialog_handling_mode()
@@ -730,9 +727,9 @@ def create_workflow_functions(
                     # 空の通常計画を設定（ダイアログ解消後にreplanで生成される）
                     current_objective.execution_plan = []
                     
-                    print(Fore.YELLOW + f"🔒 ダイアログ処理ステップ: {len(dialog_plan)}個")
+                    SLog.info(LogCategory.PLAN, LogEvent.START, {"mode": "dialog", "steps": len(dialog_plan)}, f"ダイアログ処理ステップ: {len(dialog_plan)}個")
                     for i, step in enumerate(dialog_plan):
-                        print(Fore.YELLOW + f"  [{i}] {step}")
+                        SLog.debug(LogCategory.PLAN, LogEvent.UPDATE, {"index": i, "step": step}, None)
                     
                     # 初回画像をキャッシュに保存
                     image_cache["previous_image_url"] = image_url
@@ -768,8 +765,7 @@ def create_workflow_functions(
                 
                 if pre_eval.achieved:
                     # 目標は既に達成済み → 計画不要、次の目標へ
-                    print(Fore.GREEN + f"✅ 目標「{current_objective.description[:50]}...」は既に達成済み")
-                    print(Fore.GREEN + f"   根拠: {pre_eval.evidence}")
+                    SLog.info(LogCategory.OBJECTIVE, LogEvent.ACHIEVED, {"objective": current_objective.description[:50], "evidence": pre_eval.evidence}, f"目標「{current_objective.description[:50]}...」は既に達成済み")
                     current_objective.status = "completed"
                     current_objective.result = pre_eval
                     
@@ -777,12 +773,12 @@ def create_workflow_functions(
                     if objective_progress.advance_to_next_objective():
                         current_objective = objective_progress.get_current_step()
                         current_objective.status = "in_progress"
-                        print(Fore.GREEN + f"🎯 次の目標ステップへ: {current_objective.description}")
+                        SLog.info(LogCategory.OBJECTIVE, LogEvent.START, {"objective": current_objective.description}, f"次の目標ステップへ: {current_objective.description}")
                         # 次の目標に対して画面分析と計画作成
                         screen_analysis = await planner.analyze_screen(ui_elements, image_url, current_objective.description)
                     else:
                         # 全目標達成
-                        print(Fore.GREEN + f"🎉 全目標ステップ達成！")
+                        SLog.info(LogCategory.OBJECTIVE, LogEvent.COMPLETE, {"all_achieved": True}, "全目標ステップ達成！")
                         plan = Plan(steps=["全目標達成済み"])
                         return {"plan": plan.steps, "replan_count": 0}
                 
@@ -793,8 +789,8 @@ def create_workflow_functions(
                 )
                 current_objective.execution_plan = plan.steps
                 
-                print(Fore.GREEN + f"🎯 目標「{current_objective.description[:50]}...」の実行計画: {len(plan.steps)}ステップ")
-                print(Fore.GREEN + f"生成された計画: {plan}")
+                SLog.info(LogCategory.PLAN, LogEvent.COMPLETE, {"objective": current_objective.description[:50], "steps": len(plan.steps)}, f"目標「{current_objective.description[:50]}...」の実行計画: {len(plan.steps)}ステップ")
+                SLog.debug(LogCategory.PLAN, LogEvent.UPDATE, {"plan": plan.steps}, None)
 
                 # ステップを番号付きリストに整形し、reasoning も含める
                 formatted_steps = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan.steps))
@@ -831,7 +827,7 @@ def create_workflow_functions(
                     "replan_count": 0,  # 初期化時はreplan_countを0に設定
                 }
             except Exception as e:
-                print(Fore.RED + f"plan_stepでエラー: {e}")
+                SLog.error(LogCategory.PLAN, LogEvent.FAIL, {"error": str(e)}, f"plan_stepでエラー: {e}")
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f} seconds",
@@ -849,21 +845,18 @@ def create_workflow_functions(
         progress_summary = ""
         if execution_progress["progress"]:
             progress_summary = execution_progress["progress"].get_progress_summary()
-            print(Fore.CYAN + f"\n{'='*50}")
-            print(Fore.CYAN + "📊 現在の進捗状況:")
-            print(Fore.CYAN + progress_summary)
-            print(Fore.CYAN + f"{'='*50}\n")
+            SLog.info(LogCategory.PROGRESS, LogEvent.UPDATE, {"replan_count": current_replan_count}, "現在の進捗状況")
+            SLog.debug(LogCategory.PROGRESS, LogEvent.UPDATE, {"summary": progress_summary}, None)
         
         # 目標進捗サマリーを取得
         objective_summary = ""
         if objective_progress_cache.get("progress"):
             objective_summary = objective_progress_cache["progress"].get_progress_summary()
-            print(Fore.CYAN + f"\n{'='*50}")
-            print(Fore.CYAN + "🎯 目標ステップ進捗:")
-            print(Fore.CYAN + objective_summary)
-            print(Fore.CYAN + f"{'='*50}\n")
+            SLog.info(LogCategory.OBJECTIVE, LogEvent.UPDATE, {"replan_count": current_replan_count}, "目標ステップ進捗")
+            SLog.debug(LogCategory.OBJECTIVE, LogEvent.UPDATE, {"summary": objective_summary}, None)
         
         # リプラン進捗ログを出力（replan_stepは 1 から順にカウント）
+        # ⚠️ GUI通知用 - 変更禁止
         import json
         print(f"[REPLAN_PROGRESS] {json.dumps({'current_replan_count': current_replan_count + 1, 'max_replan_count': max_replan_count, 'status': 'replanning'})}")
         
@@ -889,9 +882,10 @@ def create_workflow_functions(
             start_time = time.time()
             # リプラン回数制限チェック
             if current_replan_count >= max_replan_count:
-                print(
-                    Fore.YELLOW
-                    + f"リプラン回数が制限に達しました（{max_replan_count}回）。処理を終了します。"
+                SLog.log(
+                    LogCategory.REPLAN,
+                    LogEvent.END,
+                    f"リプラン回数が制限に達しました（{max_replan_count}回）。処理を終了します。",
                 )
                 
                 elapsed = time.time() - start_time
@@ -963,9 +957,10 @@ def create_workflow_functions(
 
                 # 現在画像を次回用にキャッシュに保存
                 image_cache["previous_image_url"] = image_url
-                print(
-                    Fore.YELLOW
-                    + f"Replanner Output (replan #{current_replan_count + 1}): {replan_result}"
+                SLog.log(
+                    LogCategory.REPLAN,
+                    LogEvent.COMPLETE,
+                    f"Replanner Output (replan #{current_replan_count + 1}): {replan_result}",
                 )
                 
                 # 注: 目標ステップの完了処理は simple_planner.py の replan() 内で行われる
@@ -985,7 +980,7 @@ def create_workflow_functions(
                     if RESULT_PASS in replan_result.action.status:
                         if objective_progress and not objective_progress.is_all_objectives_completed():
                             remaining_count = objective_progress.get_total_objectives_count() - objective_progress.get_completed_objectives_count()
-                            print(Fore.YELLOW + f"⚠️ 警告: {remaining_count}個の目標が未達成ですが、PASSが返されました")
+                            SLog.warn(LogCategory.OBJECTIVE, LogEvent.UPDATE, {"remaining": remaining_count, "total": objective_progress.get_total_objectives_count()}, f"警告: {remaining_count}個の目標が未達成ですがPASSが返されました")
                             allure.attach(
                                 f"警告: 目標ステップが{remaining_count}個未達成ですが、LLMがPASSを返しました。\n"
                                 f"達成済み: {objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()}",
@@ -1025,9 +1020,10 @@ def create_workflow_functions(
 
                     # PASSでない場合は原因分析を実行
                     if RESULT_PASS not in evaluated_response:
-                        print(
-                            Fore.YELLOW
-                            + f"テストがPASSしませんでした。原因分析を実行します..."
+                        SLog.log(
+                            LogCategory.ANALYZE,
+                            LogEvent.START,
+                            "テストがPASSしませんでした。原因分析を実行します...",
                         )
                         
                         # LLMによる原因分析を実行（通常のテスト失敗）
@@ -1039,11 +1035,8 @@ def create_workflow_functions(
                         )
                         
                         # 分析結果をログ出力
-                        print(Fore.YELLOW + f"\n{'='*60}")
-                        print(Fore.YELLOW + "テスト失敗 - 原因分析結果")
-                        print(Fore.YELLOW + f"{'='*60}")
-                        print(Fore.YELLOW + analysis_result)
-                        print(Fore.YELLOW + f"{'='*60}\n")
+                        SLog.warn(LogCategory.TEST, LogEvent.FAIL, {"failure_type": "test_failure"}, "テスト失敗 - 原因分析結果")
+                        SLog.debug(LogCategory.TEST, LogEvent.FAIL, {"analysis": analysis_result}, None)
                         
                         # Allureに分析結果を添付
                         allure.attach(
@@ -1101,22 +1094,18 @@ def create_workflow_functions(
                         if objective_progress_cache["progress"].is_handling_dialog():
                             # ダイアログ処理中 → execution_planは更新しない
                             dialog_count = objective_progress_cache["progress"].get_dialog_handling_count()
-                            print(Fore.YELLOW + f"🔒 [replan_step] ダイアログ処理モード")
-                            print(Fore.YELLOW + f"   ダイアログ処理ステップ: {len(new_plan)}個を実行予定")
-                            print(Fore.YELLOW + f"   累計ダイアログ処理: {dialog_count}ステップ完了")
-                            print(Fore.YELLOW + f"   通常計画は凍結中（更新しない）")
+                            SLog.info(LogCategory.REPLAN, LogEvent.UPDATE, {"mode": "dialog", "dialog_steps": len(new_plan), "dialog_count": dialog_count}, f"ダイアログ処理モード: {len(new_plan)}個のステップを実行予定")
                         else:
                             # 通常モード → 実行計画を更新
                             objective_progress_cache["progress"].set_current_execution_plan(new_plan)
-                            print(Fore.CYAN + f"📋 [replan_step] 通常処理モード")
-                            print(Fore.CYAN + f"   新しい実行計画: {len(new_plan)}ステップ")
+                            SLog.info(LogCategory.REPLAN, LogEvent.UPDATE, {"mode": "normal", "new_steps": len(new_plan)}, f"通常処理モード: 新しい実行計画 {len(new_plan)}ステップ")
                     
                     return {
                         "plan": new_plan,
                         "replan_count": current_replan_count + 1,
                     }
             except Exception as e:
-                print(Fore.RED + f"Error in replan_step: {e}")
+                SLog.error(LogCategory.REPLAN, LogEvent.FAIL, {"error": str(e)}, f"Error in replan_step: {e}")
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f} seconds",

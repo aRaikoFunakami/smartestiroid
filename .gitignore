@@ -208,6 +208,7 @@ __marimo__/
 .vscode/mcp.json
 
 # Smartestiroid
+smartestiroid_logs/
 capabilities_t4c.json
 *_screenshot.*
 TODO.md

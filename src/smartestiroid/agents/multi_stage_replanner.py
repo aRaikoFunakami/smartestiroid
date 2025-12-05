@@ -6,13 +6,13 @@ This module provides a 3-stage replanning process for mini models.
 
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from colorama import Fore
 from langchain_core.messages import HumanMessage
 import allure
 
 from ..models import Plan, Response, DecisionResult
 from ..progress import ObjectiveStep, ObjectiveProgress
 from ..config import RESULT_PASS, RESULT_FAIL
+from ..utils.structured_logger import SLog, LogCategory, LogEvent
 
 
 class ObjectiveEvaluation(BaseModel):
@@ -136,32 +136,28 @@ class MultiStageReplanner:
         dialog_count = objective_progress.get_dialog_handling_count()
         
         # ★ログ出力: ダイアログ処理モードと通常モードで分離
-        print(Fore.CYAN + "=" * 60)
         if dialog_mode:
             # ダイアログ処理モード用ログ
-            print(Fore.YELLOW + "[analyze_state] 🔒 ダイアログ処理モード")
-            print(Fore.YELLOW + f"  ダイアログ処理ステップ完了数: {dialog_count}")
-            print(Fore.YELLOW + f"  凍結中の通常計画: {total_steps}ステップ (完了: {completed_steps}, 残り: {remaining_steps})")
-            print(Fore.YELLOW + f"  復帰先の目標: [{current_step.index}] {current_step.description[:60]}...")
-            # 停止位置を表示（次に実行予定だったステップ）
-            if remaining:
-                print(Fore.YELLOW + f"  ⮩ 停止位置 (次に実行予定だったステップ):")
-                print(Fore.YELLOW + f"    [{completed_steps + 1}/{total_steps}] {remaining[0][:70]}...")
+            SLog.log(LogCategory.ANALYZE, LogEvent.START, {
+                "mode": "dialog",
+                "dialog_count": dialog_count,
+                "frozen_plan": {"total": total_steps, "completed": completed_steps, "remaining": remaining_steps},
+                "target_objective": {"index": current_step.index, "description": current_step.description[:60]},
+                "next_pending_step": remaining[0][:70] if remaining else None
+            }, "🔒 ダイアログ処理モード")
         else:
             # 通常モード用ログ
-            print(Fore.CYAN + "[analyze_state] 📋 通常処理モード")
-            print(Fore.CYAN + f"  計画ステップ: {total_steps} (完了: {completed_steps}, 残り: {remaining_steps})")
-            print(Fore.CYAN + f"  目標進捗: {objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()} 完了")
-            print(Fore.CYAN + f"  現在の目標: [{current_step.index}] {current_step.description[:60]}...")
+            SLog.log(LogCategory.ANALYZE, LogEvent.START, {
+                "mode": "normal",
+                "plan": {"total": total_steps, "completed": completed_steps, "remaining": remaining_steps},
+                "objective_progress": f"{objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()}",
+                "current_objective": {"index": current_step.index, "description": current_step.description[:60]}
+            }, "📋 通常処理モード")
         
         # 直近の実行ステップ（両モード共通）
         if past_steps:
-            mode_color = Fore.YELLOW if dialog_mode else Fore.CYAN
-            print(mode_color + f"  直近のステップ (最新3件):")
-            for step, result in past_steps[-3:]:
-                result_short = str(result)[:50] + "..." if len(str(result)) > 50 else str(result)
-                print(mode_color + f"    - {step[:60]}... → {result_short}")
-        print(Fore.CYAN + "=" * 60)
+            recent_steps = [{"step": step[:60], "result": str(result)[:50]} for step, result in past_steps[-3:]]
+            SLog.log(LogCategory.ANALYZE, LogEvent.UPDATE, {"recent_steps": recent_steps}, "直近のステップ (最新3件)")
         
         # 目標ステップ情報を構築
         # ObjectiveProgress.format_for_llm()を使用して進捗情報を生成
@@ -284,6 +280,15 @@ class MultiStageReplanner:
         if current_image_url:
             content_blocks.append({"type": "image_url", "image_url": {"url": current_image_url}})
 
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "analyze_state",
+            "model": self.model_name,
+            "prompt": prompt_text,
+            "has_previous_image": bool(previous_image_url),
+            "has_current_image": bool(current_image_url)
+        }, "LLMプロンプト送信: analyze_state")
+
         # 構造化出力を使用
         structured_llm = self.llm.with_structured_output(StateAnalysis)
         
@@ -295,16 +300,15 @@ class MultiStageReplanner:
         # ObjectiveProgressは必須なので、正確な残りステップ数を使用
         plan_still_valid = state_analysis.is_plan_still_valid(remaining_steps)
         
-        print(Fore.MAGENTA + f"[MultiStageReplanner.analyze_state model: {self.model_name}] State analysis completed")
+        SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
+            "model": self.model_name,
+            "screen_type": state_analysis.current_screen_type,
+            "current_objective_achieved": state_analysis.current_objective_achieved,
+            "blocking_dialogs": state_analysis.blocking_dialogs or None,
+            "plan_still_valid": plan_still_valid,
+            "screen_inconsistency": state_analysis.screen_inconsistency if state_analysis.has_screen_inconsistency() else None
+        }, "State analysis completed")
         
-        # ★画面整合性チェック結果を表示★
-        if state_analysis.has_screen_inconsistency():
-            print(Fore.YELLOW + f"  - ⚠️ screen_inconsistency: {state_analysis.screen_inconsistency}")
-        
-        print(Fore.CYAN + f"  - screen_type: {state_analysis.current_screen_type}")
-        print(Fore.CYAN + f"  - current_objective_achieved: {state_analysis.current_objective_achieved}")
-        print(Fore.CYAN + f"  - blocking_dialogs: {state_analysis.blocking_dialogs or 'None'}")
-        print(Fore.CYAN + f"  - plan_still_valid: {plan_still_valid} (derived)")
         return state_analysis
 
     
@@ -385,6 +389,13 @@ class MultiStageReplanner:
 厳格なJSON
 """
 
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "decide_action",
+            "model": self.model_name,
+            "prompt": prompt
+        }, "LLMプロンプト送信: decide_action")
+
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(DecisionResult)
         try:
@@ -394,14 +405,17 @@ class MultiStageReplanner:
             else:
                 result = await structured_llm.ainvoke(messages)
             
-            print(Fore.MAGENTA + f"[MultiStageReplanner.decide_action model: {self.model_name}] Decision: {result.decision}")
+            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
+                "model": self.model_name,
+                "decision": result.decision
+            }, f"Decision: {result.decision}")
             decision_norm = result.decision.strip().upper()
             if decision_norm not in ("PLAN", "RESPONSE"):
                 decision_norm = "PLAN"  # 安全側フォールバック
             return decision_norm, result.reason.strip()
         except Exception as e:
             # 構造化出力失敗時は安全側でPLANを返す
-            print(Fore.RED + f"Structured Output Error: {e}")
+            SLog.error({"error": str(e)}, "Structured Output Error")
             allure.attach(str(e), name="❌ decide_action: Structured Output Error", attachment_type=allure.attachment_type.TEXT)
             return "PLAN", "構造化出力エラーのためフォールバック"
     
@@ -439,30 +453,26 @@ class MultiStageReplanner:
         completed_steps = total_steps - remaining_count
         
         # ★ログ出力: ダイアログ処理モードと通常モードで分離
-        print(Fore.CYAN + "=" * 60)
         if dialog_mode:
             # ダイアログ処理モード用ログ
-            print(Fore.YELLOW + "[build_plan] 🔒 ダイアログ処理モード")
-            print(Fore.YELLOW + f"  ダイアログ処理ステップ完了数: {dialog_count}")
-            print(Fore.YELLOW + f"  ブロッキングダイアログ: {state_analysis.blocking_dialogs}")
-            print(Fore.YELLOW + f"  凍結中の通常計画: {total_steps}ステップ (完了: {completed_steps}, 残り: {remaining_count})")
-            print(Fore.YELLOW + f"  復帰先の目標: [{current_step.index}] {current_step.description[:60]}...")
-            # 停止位置を表示
-            if remaining:
-                print(Fore.YELLOW + f"  ⮩ 停止位置 (次に実行予定だったステップ):")
-                print(Fore.YELLOW + f"    [{completed_steps + 1}/{total_steps}] {remaining[0][:70]}...")
+            SLog.log(LogCategory.PLAN, LogEvent.START, {
+                "mode": "dialog",
+                "dialog_count": dialog_count,
+                "blocking_dialogs": state_analysis.blocking_dialogs,
+                "frozen_plan": {"total": total_steps, "completed": completed_steps, "remaining": remaining_count},
+                "target_objective": {"index": current_step.index, "description": current_step.description[:60]},
+                "next_pending_step": remaining[0][:70] if remaining else None
+            }, "🔒 ダイアログ処理モード")
         else:
             # 通常モード用ログ
-            print(Fore.CYAN + "[build_plan] 📋 通常処理モード")
-            print(Fore.CYAN + f"  計画ステップ: {total_steps} (完了: {completed_steps}, 残り: {remaining_count})")
-            if remaining:
-                print(Fore.CYAN + f"  残りステップ (最初の3件):")
-                for step in remaining[:3]:
-                    print(Fore.CYAN + f"    - {step[:60]}...")
-            print(Fore.CYAN + f"  目標進捗: {objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()} 完了")
-            print(Fore.CYAN + f"  現在の目標: [{current_step.index}] {current_step.description[:60]}...")
-            print(Fore.CYAN + f"  StateAnalysis: achieved={state_analysis.current_objective_achieved}, blocking={bool(state_analysis.blocking_dialogs)}")
-        print(Fore.CYAN + "=" * 60)
+            SLog.log(LogCategory.PLAN, LogEvent.START, {
+                "mode": "normal",
+                "plan": {"total": total_steps, "completed": completed_steps, "remaining": remaining_count},
+                "remaining_steps_preview": [step[:60] for step in remaining[:3]] if remaining else [],
+                "objective_progress": f"{objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()}",
+                "current_objective": {"index": current_step.index, "description": current_step.description[:60]},
+                "state_analysis": {"achieved": state_analysis.current_objective_achieved, "blocking": bool(state_analysis.blocking_dialogs)}
+            }, "📋 通常処理モード")
         
         # ★★★ C案: ハイブリッド方式 ★★★
         # 残りステップはコード側で保護し、LLMにはブロッキングダイアログ処理のみを任せる
@@ -472,16 +482,19 @@ class MultiStageReplanner:
         if not state_analysis.blocking_dialogs and remaining_count > 0:
             if dialog_mode:
                 # ダイアログ処理が完了し、通常処理に復帰
-                print(Fore.GREEN + f"[build_plan] 🔓 ダイアログ処理完了 → 通常処理に復帰")
-                print(Fore.GREEN + f"  凍結解除: 残り{remaining_count}ステップを再開")
+                SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
+                    "remaining_steps": remaining_count
+                }, "🔓 ダイアログ処理完了 → 通常処理に復帰")
             else:
-                print(Fore.GREEN + f"[build_plan] 📋 通常継続: 残り{remaining_count}ステップ")
+                SLog.log(LogCategory.PLAN, LogEvent.UPDATE, {
+                    "remaining_steps": remaining_count
+                }, "📋 通常継続")
             return Plan(steps=remaining)
         
         # ケース2: 残りステップがない場合
         # → 目標達成済みまたは次の目標へ進む必要がある（新規プラン生成が必要）
         if remaining_count == 0:
-            print(Fore.YELLOW + f"[build_plan] 📝 残りステップなし: 新規プラン生成")
+            SLog.log(LogCategory.PLAN, LogEvent.UPDATE, {}, "📝 残りステップなし: 新規プラン生成")
             return await self._generate_new_plan(
                 goal, state_analysis, objective_progress, locator
             )
@@ -490,13 +503,16 @@ class MultiStageReplanner:
         # → ダイアログ処理ステップのみをLLMに生成させる
         # → 残りステップは execution_plan に凍結されているので結合不要
         # → ダイアログ解消後、次のreplanで残りステップが返される
-        print(Fore.YELLOW + f"[build_plan] 🔒 ダイアログ処理: ステップ生成中")
-        print(Fore.YELLOW + f"  ブロッキング: {state_analysis.blocking_dialogs}")
-        print(Fore.YELLOW + f"  凍結中: {remaining_count}ステップ（ダイアログ解消後に再開）")
+        SLog.log(LogCategory.DIALOG, LogEvent.START, {
+            "blocking_dialogs": state_analysis.blocking_dialogs,
+            "frozen_steps": remaining_count
+        }, "🔒 ダイアログ処理: ステップ生成中")
         dialog_steps = await self._generate_dialog_handling_steps(
             state_analysis, locator
         )
-        print(Fore.YELLOW + f"[build_plan] 🔒 ダイアログ処理ステップ生成完了: {len(dialog_steps)}個")
+        SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
+            "generated_steps": len(dialog_steps)
+        }, "🔒 ダイアログ処理ステップ生成完了")
         return Plan(steps=dialog_steps)  # ダイアログ処理のみ（結合しない）
     
     def _create_state_analysis_for_dialog(self, screen_analysis) -> StateAnalysis:
@@ -551,6 +567,13 @@ class MultiStageReplanner:
 steps: ダイアログを閉じるためのステップ（1〜2個のリスト）
 """
         
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "_generate_dialog_handling_steps",
+            "model": self.model_name,
+            "prompt": prompt
+        }, "LLMプロンプト送信: _generate_dialog_handling_steps")
+
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Plan)
         
@@ -561,10 +584,12 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
             else:
                 plan = await structured_llm.ainvoke(messages)
             
-            print(Fore.MAGENTA + f"[_generate_dialog_handling_steps] 生成: {len(plan.steps)}ステップ")
+            SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
+                "generated_steps": len(plan.steps)
+            }, f"生成: {len(plan.steps)}ステップ")
             return plan.steps
         except Exception as e:
-            print(Fore.RED + f"[_generate_dialog_handling_steps] エラー: {e}")
+            SLog.error({"error": str(e)}, "ダイアログステップ生成エラー")
             # フォールバック: blocking_dialogsに記載されたresource-idを使ってタップ
             if state_analysis.blocking_dialogs:
                 fallback_step = f"resource-id '{state_analysis.blocking_dialogs}' をタップしてダイアログを閉じる"
@@ -641,6 +666,13 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
 出力形式: 厳密なJSON形式
 """
         
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "_generate_new_plan",
+            "model": self.model_name,
+            "prompt": prompt
+        }, "LLMプロンプト送信: _generate_new_plan")
+
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Plan)
         
@@ -650,7 +682,9 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
         else:
             plan = await structured_llm.ainvoke(messages)
         
-        print(Fore.MAGENTA + f"[_generate_new_plan] 新規プラン生成完了: {len(plan.steps)}ステップ")
+        SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
+            "generated_steps": len(plan.steps)
+        }, "新規プラン生成完了")
         return plan
     
     async def build_response(
@@ -717,6 +751,13 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
 厳格なJSON形式（status と reason フィールドを持つ）
 """
         
+        # LLMプロンプトをログ出力
+        SLog.log(LogCategory.LLM, LogEvent.START, {
+            "method": "build_response",
+            "model": self.model_name,
+            "prompt": prompt
+        }, "LLMプロンプト送信: build_response")
+
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Response)
         
@@ -726,5 +767,8 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
         else:
             resp = await structured_llm.ainvoke(messages)
         
-        print(Fore.MAGENTA + f"[MultiStageReplanner.build_response model: {self.model_name}] Response created: {resp.status}")
+        SLog.log(LogCategory.TEST, LogEvent.COMPLETE, {
+            "model": self.model_name,
+            "status": resp.status
+        }, f"Response created: {resp.status}")
         return resp
