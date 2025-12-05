@@ -78,6 +78,12 @@ def pytest_addoption(parser):
         default=False,
         help="高速・低コストのMiniモデルを使用する"
     )
+    parser.addoption(
+        "--test-range",
+        action="store",
+        default=None,
+        help="テストIDの範囲を指定 (例: 0025-0030,0040-0045,0050)"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -153,6 +159,37 @@ def pytest_configure(config):
     capabilities_path = cap_path
 
 
+def _parse_test_range(range_str: str) -> set:
+    """テスト範囲文字列をパースしてテストID番号のセットを返す
+    
+    Args:
+        range_str: 範囲指定文字列 (例: "0025-0030,0040-0045,0050")
+    
+    Returns:
+        テストID番号のセット (例: {25, 26, 27, 28, 29, 30, 40, 41, ...})
+    """
+    result = set()
+    for part in range_str.split(","):
+        part = part.strip()
+        if "-" in part:
+            # 範囲指定: "0025-0030"
+            start, end = part.split("-", 1)
+            try:
+                start_num = int(start)
+                end_num = int(end)
+                for i in range(start_num, end_num + 1):
+                    result.add(i)
+            except ValueError:
+                pass  # 無効な範囲は無視
+        else:
+            # 単一指定: "0050"
+            try:
+                result.add(int(part))
+            except ValueError:
+                pass
+    return result
+
+
 def pytest_collection_modifyitems(session, config, items):
     """pytest がテストを収集した後に呼ばれる（-k フィルタ適用後）
     
@@ -163,6 +200,37 @@ def pytest_collection_modifyitems(session, config, items):
     items には実際に実行されるテストのみが含まれる。
     """
     import sys
+    import re
+    
+    # --test-range オプションによるフィルタリング
+    test_range = config.getoption("--test-range", None)
+    if test_range:
+        allowed_ids = _parse_test_range(test_range)
+        selected = []
+        deselected = []
+        
+        for item in items:
+            # テスト名から TEST_XXXX の番号を抽出
+            match = re.search(r'TEST_(\d+)', item.name)
+            if match:
+                test_num = int(match.group(1))
+                if test_num in allowed_ids:
+                    selected.append(item)
+                else:
+                    deselected.append(item)
+            else:
+                # TEST_XXXX 形式でないテストは除外
+                deselected.append(item)
+        
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+        
+        SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {
+            "range": test_range,
+            "selected_count": len(selected)
+        }, f"--test-range: {len(selected)}件のテストを選択")
+    
     total = len(items)
     sys._pytest_total_tests = total
     sys._pytest_test_order = {}
@@ -439,10 +507,9 @@ async def evaluate_task_result(
     except Exception as e:
         err_type = type(e).__name__
         SLog.error(LogCategory.LLM, LogEvent.FAIL, {"error_type": err_type, "error": str(e)}, f"[evaluate_task_result] Exception: {err_type}: {e}")
-        allure.attach(
+        SLog.attach_text(
             f"Exception Type: {err_type}\nLocation: evaluate_task_result\nMessage: {e}",
-            name="❌ evaluate_task_result Exception",
-            attachment_type=allure.attachment_type.TEXT
+            "❌ evaluate_task_result Exception"
         )
         log_openai_error_to_allure(
             error_type=err_type,
@@ -734,10 +801,9 @@ class SmartestiRoid:
 
             except Exception as e:
                 SLog.error(LogCategory.TEST, LogEvent.FAIL, {"error": str(e)}, f"実行中にエラーが発生しました: {e}")
-                allure.attach(
+                SLog.attach_text(
                     f"テスト実行中にエラーが発生しました:\n{e}",
-                    name="❌ Test Execution Error",
-                    attachment_type=allure.attachment_type.TEXT,
+                    "❌ Test Execution Error"
                 )
                 assert False, f"テスト実行中にエラーが発生しました: {e}"
             finally:

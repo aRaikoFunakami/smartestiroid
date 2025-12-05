@@ -249,7 +249,7 @@ def log_openai_timeout_to_allure(location: str, model: str, elapsed: float, cont
         for key, value in context.items():
             error_details += f"\n- {key}: {value}"
     
-    SLog.error({
+    SLog.error(LogCategory.ERROR, LogEvent.FAIL, {
         "location": location,
         "elapsed": f"{elapsed:.2f}s",
         "model": model
@@ -288,13 +288,13 @@ def log_openai_error_to_allure(error_type: str, location: str, model: str, error
     
     # エラー種別に応じたログ出力
     if error_type == "RateLimitError":
-        SLog.warn({"location": location}, f"⚠️  OpenAI API レート制限 in {location}")
+        SLog.warn(LogCategory.ERROR, LogEvent.RETRY, {"location": location}, f"⚠️  OpenAI API レート制限 in {location}")
     elif error_type == "AuthenticationError":
-        SLog.error({"location": location}, f"🔐 OpenAI API 認証エラー in {location}")
+        SLog.error(LogCategory.ERROR, LogEvent.FAIL, {"location": location}, f"🔐 OpenAI API 認証エラー in {location}")
     elif error_type == "APIConnectionError":
-        SLog.warn({"location": location}, f"🌐 OpenAI API 接続エラー in {location}")
+        SLog.warn(LogCategory.ERROR, LogEvent.RETRY, {"location": location}, f"🌐 OpenAI API 接続エラー in {location}")
     else:
-        SLog.error({"location": location, "error_type": error_type}, f"❌ OpenAI API エラー ({error_type}) in {location}")
+        SLog.error(LogCategory.ERROR, LogEvent.FAIL, {"location": location, "error_type": error_type}, f"❌ OpenAI API エラー ({error_type}) in {location}")
     
     allure.attach(
         error_details,

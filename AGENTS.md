@@ -270,6 +270,35 @@ async def example_function(
    - 開発中は互換性より、正しく動作するシンプルなコードを優先する
    - 後方互換性が必要になったら、その時点で対応する
 
+### ⚠️ SLog（StructuredLogger）の使用ルール
+
+`SLog.error` / `SLog.warn` / `SLog.info` / `SLog.debug` は**すべて同じ引数順序**です：
+
+```python
+SLog.error(category, event, data, message)
+SLog.warn(category, event, data, message)
+SLog.info(category, event, data, message)
+```
+
+**最初の2引数（category, event）は必須です。**
+
+```python
+# ✅ 正しい使い方
+except Exception as e:
+    SLog.error(
+        LogCategory.PLAN,           # 1. category（必須）
+        LogEvent.FAIL,              # 2. event（必須）
+        {"error": str(e)},          # 3. data（オプション）
+        f"計画生成失敗: {e}"          # 4. message（オプション）
+    )
+
+# ❌ 間違い - categoryとeventが欠落
+SLog.error({"error": str(e)}, "エラーメッセージ")
+
+# ❌ 間違い - dataをcategory位置に渡している
+SLog.warn({"key": "value"}, "警告メッセージ")
+```
+
 ---
 
 ## 🚀 よく使うコマンド

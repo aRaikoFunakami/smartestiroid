@@ -123,7 +123,7 @@ class SimplePlanner:
             
         except Exception as e:
             err_type = type(e).__name__
-            SLog.error({"error_type": err_type, "error": str(e)}, "analyze_screen Exception")
+            SLog.error(LogCategory.ANALYZE, LogEvent.FAIL, {"error_type": err_type, "error": str(e)}, "analyze_screen Exception")
             # フォールバック: 基本的な分析結果を返す
             return ScreenAnalysis(
                 screen_type="不明",
@@ -230,7 +230,7 @@ class SimplePlanner:
             
         except Exception as e:
             err_type = type(e).__name__
-            SLog.error({"error_type": err_type, "error": str(e)}, "parse_objective_steps Exception")
+            SLog.error(LogCategory.PLAN, LogEvent.FAIL, {"error_type": err_type, "error": str(e)}, "parse_objective_steps Exception")
             # フォールバック: 入力全体を1つの目標として扱う
             return ObjectiveProgress(
                 original_input=user_input,
@@ -327,7 +327,7 @@ class SimplePlanner:
             
         except Exception as e:
             err_type = type(e).__name__
-            SLog.error({"error_type": err_type, "error": str(e)}, "create_execution_plan_for_objective Exception")
+            SLog.error(LogCategory.PLAN, LogEvent.FAIL, {"error_type": err_type, "error": str(e)}, "create_execution_plan_for_objective Exception")
             return Plan(steps=[f"目標「{objective_step.description}」を達成する"])
 
     async def evaluate_objective_completion(
@@ -411,7 +411,7 @@ class SimplePlanner:
             
         except Exception as e:
             err_type = type(e).__name__
-            SLog.error({"error_type": err_type, "error": str(e)}, "evaluate_objective_completion Exception")
+            SLog.error(LogCategory.OBJECTIVE, LogEvent.FAIL, {"error_type": err_type, "error": str(e)}, "evaluate_objective_completion Exception")
             return ObjectiveStepResult(
                 achieved=False,
                 evidence=f"評価エラー: {e}"
@@ -486,7 +486,7 @@ class SimplePlanner:
             
         except Exception as e:
             err_type = type(e).__name__
-            SLog.error({"error_type": err_type, "error": str(e)}, "create_recovery_plan Exception")
+            SLog.error(LogCategory.PLAN, LogEvent.FAIL, {"error_type": err_type, "error": str(e)}, "create_recovery_plan Exception")
             return f"障害物を回避: {blocking_reason[:30]}...", ["障害物を閉じる"]
 
     async def replan(
@@ -540,7 +540,7 @@ class SimplePlanner:
                 if state_analysis.has_screen_inconsistency():
                     retry_count += 1
                     if retry_count <= SCREEN_INCONSISTENCY_MAX_RETRIES:
-                        SLog.warn({
+                        SLog.warn(LogCategory.SCREEN, LogEvent.RETRY, {
                             "screen_inconsistency": state_analysis.screen_inconsistency,
                             "retry_count": retry_count,
                             "max_retries": SCREEN_INCONSISTENCY_MAX_RETRIES,
@@ -556,15 +556,11 @@ class SimplePlanner:
                     else:
                         # リトライ上限到達 → テスト失敗
                         error_msg = f"画面不整合が{retry_count}回のリトライ後も解消されませんでした。\n詳細: {state_analysis.screen_inconsistency}"
-                        SLog.error({
+                        SLog.error(LogCategory.SCREEN, LogEvent.FAIL, {
                             "retry_count": retry_count,
                             "screen_inconsistency": state_analysis.screen_inconsistency
                         }, "❌ 画面不整合が解消されません（リトライ上限到達）")
-                        allure.attach(
-                            error_msg,
-                            name="❌ 画面不整合（リトライ上限到達）",
-                            attachment_type=allure.attachment_type.TEXT
-                        )
+                        SLog.attach_text(error_msg, "❌ 画面不整合（リトライ上限到達）")
                         pytest.fail(error_msg)
                 else:
                     # 正常（不整合なし）
@@ -624,7 +620,7 @@ class SimplePlanner:
             SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
                 "state_summary": state_summary
             }, "状態分析結果")
-            allure.attach(state_summary, name=f"🔍 State Analysis Results [model: {self.model_name}]", attachment_type=allure.attachment_type.TEXT)
+            SLog.attach_text(state_summary, f"🔍 State Analysis Results [model: {self.model_name}]")
             
             SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {"stage": 2}, "🔀 Multi-stage replan: STAGE 2（Action Decision）")
             decision, reason = await self.replanner.decide_action(
@@ -638,7 +634,7 @@ class SimplePlanner:
                 "decision": decision,
                 "reason": reason
             }, f"判定結果: {decision}")
-            allure.attach(f"DECISION: {decision}\n{reason}", name=f"⚖️ Action Decision [model: {self.model_name}]", attachment_type=allure.attachment_type.TEXT)
+            SLog.attach_text(f"DECISION: {decision}\n{reason}", f"⚖️ Action Decision [model: {self.model_name}]")
             
             SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {"stage": 3}, "🔀 Multi-stage replan: STAGE 3（Output Generation）")
             if decision == "RESPONSE":
@@ -667,10 +663,9 @@ class SimplePlanner:
                         "status": response.status,
                         "reason": response.reason[:100]
                     }, f"✅ Response生成完了: [{response.status}]")
-                    allure.attach(
+                    SLog.attach_text(
                         f"Status: {response.status}\n\nReason:\n{response.reason}",
-                        name="📋 Build Response Result",
-                        attachment_type=allure.attachment_type.TEXT
+                        "📋 Build Response Result"
                     )
                     return Act(
                         action=response,
@@ -679,8 +674,8 @@ class SimplePlanner:
                         current_objective_evidence=state_analysis.current_objective_evidence
                     )
                 except Exception as build_err:
-                    SLog.error({"error": str(build_err)}, "❌ build_response()でエラー")
-                    allure.attach(f"build_response error: {build_err}", name="❌ build_response Error", attachment_type=allure.attachment_type.TEXT)
+                    SLog.error(LogCategory.REPLAN, LogEvent.FAIL, {"error": str(build_err)}, "❌ build_response()でエラー")
+                    SLog.attach_text(f"build_response error: {build_err}", "❌ build_response Error")
                     raise
             else:
                 # PLAN判定 = まだ継続が必要
@@ -724,13 +719,13 @@ class SimplePlanner:
                 )
         
         except Exception as e:
-            SLog.error({"error": str(e)}, "⚠️ Multi-stage replan エラー")
-            allure.attach(f"Multi-stage replan error: {e}", name="❌ Multi-stage error", attachment_type=allure.attachment_type.TEXT)
+            SLog.error(LogCategory.REPLAN, LogEvent.FAIL, {"error": str(e)}, "⚠️ Multi-stage replan エラー")
+            SLog.attach_text(f"Multi-stage replan error: {e}", "❌ Multi-stage error")
             # フォールバック: 残りのステップを返す
             remaining_steps = state["plan"][len(state["past_steps"]):]
             if remaining_steps:
                 fallback_plan = Plan(steps=remaining_steps)
-                SLog.warn({"remaining_steps": len(remaining_steps)}, f"🔄 フォールバック: 残り{len(remaining_steps)}ステップを返却")
+                SLog.warn(LogCategory.REPLAN, LogEvent.RETRY, {"remaining_steps": len(remaining_steps)}, f"🔄 フォールバック: 残り{len(remaining_steps)}ステップを返却")
                 return Act(action=fallback_plan)
             else:
                 fallback_response = Response(status=RESULT_PASS, reason=f"エラー発生のため処理を中断します: {e}")

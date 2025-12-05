@@ -383,17 +383,9 @@ def create_workflow_functions(
             ui_elements = await get_page_source_tool.ainvoke({})
             
             # ログとAllureには整形したロケーター情報を出力
-            allure.attach(
-                ui_elements,
-                name="📍 Locator Information",
-                attachment_type=allure.attachment_type.TEXT
-            )
+            SLog.attach_locator_info(ui_elements, "Locator Information")
             if image_url:
-                allure.attach(
-                    base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="📷 Current Screen",
-                    attachment_type=allure.attachment_type.JPG,
-                )
+                SLog.attach_screenshot(image_url, label="Current Screen")
             
             # タスクにロケーター情報と画像相互補完の指示を含める（LLMには生データを渡す）
             # 進捗情報を計算
@@ -462,20 +454,12 @@ def create_workflow_functions(
 
                 log_text = f"ステップ '{task}' のエージェント応答: {agent_response['messages'][-1].content}"
                 SLog.debug(LogCategory.STEP, LogEvent.RESPONSE, {"step": task, "response": agent_response['messages'][-1].content[:500]}, None)
-                allure.attach(
-                    task,
-                    name=f"Step [model: {cfg.execution_model}]",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(task, f"Step [model: {cfg.execution_model}]")
 
                 # ツール呼び出し履歴を Allure に保存
                 tool_callback.save_to_allure(step_name=task)
                 
-                allure.attach(
-                    agent_response["messages"][-1].content,
-                    name=f"Response [model: {cfg.execution_model}]",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(agent_response["messages"][-1].content, f"Response [model: {cfg.execution_model}]")
                 
                 # === Phase 1: Executor自己評価 ===
                 SLog.info(LogCategory.LLM, LogEvent.VERIFY_REQUEST, {"phase": 1, "step": task}, "Phase 1: ステップ実行結果を評価中...")
@@ -489,11 +473,17 @@ def create_workflow_functions(
                     token_callback=token_callback
                 )
                 
-                SLog.info(LogCategory.LLM, LogEvent.VERIFY_RESPONSE, {"phase": 1, "success": evaluation_result.success, "reason": evaluation_result.reason[:100]}, f"Executor評価: success={evaluation_result.success}")
-                allure.attach(
+                SLog.info(LogCategory.LLM, LogEvent.VERIFY_RESPONSE, {
+                    "phase": 1,
+                    "success": evaluation_result.success,
+                    "reason": evaluation_result.reason,
+                    "executed_action": evaluation_result.executed_action,
+                    "expected_screen_change": evaluation_result.expected_screen_change,
+                    "no_page_source_change": evaluation_result.no_page_source_change
+                }, f"Executor評価: success={evaluation_result.success}")
+                SLog.attach_text(
                     f"success: {evaluation_result.success}\nreason: {evaluation_result.reason}\nexecuted_action: {evaluation_result.executed_action}\nexpected_screen_change: {evaluation_result.expected_screen_change}\nno_page_source_change: {evaluation_result.no_page_source_change}",
-                    name="📊 Phase 1: Executor Self-Evaluation",
-                    attachment_type=allure.attachment_type.TEXT,
+                    "📊 Phase 1: Executor Self-Evaluation"
                 )
                 
                 # === Phase 2: 独立検証（Executor評価がTrueの場合のみ） ===
@@ -516,11 +506,16 @@ def create_workflow_functions(
                         token_callback=token_callback
                     )
                     
-                    SLog.info(LogCategory.LLM, LogEvent.VERIFY_RESPONSE, {"phase": 2, "verified": verification_result.verified, "confidence": verification_result.confidence}, f"検証結果: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
-                    allure.attach(
+                    SLog.info(LogCategory.LLM, LogEvent.VERIFY_RESPONSE, {
+                        "phase": 2,
+                        "verified": verification_result.verified,
+                        "confidence": verification_result.confidence,
+                        "reason": verification_result.reason,
+                        "discrepancy": verification_result.discrepancy
+                    }, f"検証結果: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
+                    SLog.attach_text(
                         f"verified: {verification_result.verified}\nconfidence: {verification_result.confidence}\nreason: {verification_result.reason}\ndiscrepancy: {verification_result.discrepancy or 'None'}",
-                        name="✅ Phase 2: Independent Verification",
-                        attachment_type=allure.attachment_type.TEXT,
+                        "✅ Phase 2: Independent Verification"
                     )
                     
                     # 両方がTrueで確信度が0.7以上の場合のみ成功とする
@@ -540,11 +535,7 @@ def create_workflow_functions(
                 tool_callback.clear()
                 
                 elapsed = time.time() - start_time
-                allure.attach(
-                    f"{elapsed:.3f} seconds",
-                    name="⏱️Execute Step Time",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(f"{elapsed:.3f} seconds", "⏱️Execute Step Time")
                 
                 # 最終的な成功/失敗を記録
                 final_status = "✅ SUCCESS" if step_success else "❌ FAILED"
@@ -552,10 +543,9 @@ def create_workflow_functions(
                     SLog.info(LogCategory.STEP, LogEvent.COMPLETE, {"step": task, "success": True}, f"SUCCESS: ステップ '{task}'")
                 else:
                     SLog.warn(LogCategory.STEP, LogEvent.FAIL, {"step": task, "success": False}, f"FAILED: ステップ '{task}'")
-                allure.attach(
+                SLog.attach_text(
                     f"Status: {final_status}\nPhase1 (Executor): success={evaluation_result.success}\nPhase2 (Verification): verified={verification_result.verified if verification_result else 'N/A'}, confidence={verification_result.confidence if verification_result else 'N/A'}",
-                    name=f"{final_status} Step Result",
-                    attachment_type=allure.attachment_type.TEXT,
+                    f"{final_status} Step Result"
                 )
 
                 # 実行されたステップを履歴に追加（評価結果に基づく）
@@ -631,17 +621,8 @@ def create_workflow_functions(
                 tool_callback.complete_step(f"Error: {error_msg}", success=False)
                 
                 elapsed = time.time() - start_time
-                allure.attach(
-                    f"{elapsed:.3f} seconds",
-                    name="Execute Step Time",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
-                
-                allure.attach(
-                    f"Detail:\n{error_msg}\n\nStep: {task}",
-                    name="❌ Execute Step Error",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(f"{elapsed:.3f} seconds", "Execute Step Time")
+                SLog.attach_text(f"Detail:\n{error_msg}\n\nStep: {task}", "❌ Execute Step Error")
 
                 # エラーも履歴に記録
                 step_history["executed_steps"].append(
@@ -672,18 +653,10 @@ def create_workflow_functions(
 
                 if ui_elements:
                     # ログとAllureには整形したロケーター情報を出力
-                    allure.attach(
-                        ui_elements,
-                        name="📍 Locator Information",
-                        attachment_type=allure.attachment_type.TEXT
-                    )
+                    SLog.attach_locator_info(ui_elements, "Locator Information")
 
                 if image_url:
-                    allure.attach(
-                        base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                        name="📷 Screenshot before Planning",
-                        attachment_type=allure.attachment_type.JPG,
-                    )
+                    SLog.attach_screenshot(image_url, label="Screenshot before Planning")
 
                 # Step 1: ユーザー入力から目標ステップを解析
                 objective_progress = await planner.parse_objective_steps(state["input"])
@@ -696,11 +669,7 @@ def create_workflow_functions(
                 objective_summary = objective_progress.get_progress_summary()
                 SLog.info(LogCategory.OBJECTIVE, LogEvent.START, {"objectives_count": len(objective_progress.objective_steps)}, f"目標ステップ解析完了: {len(objective_progress.objective_steps)}個")
                 SLog.debug(LogCategory.OBJECTIVE, LogEvent.UPDATE, {"summary": objective_summary}, None)
-                allure.attach(
-                    objective_summary,
-                    name="📋 Objective Steps (User Goals)",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(objective_summary, "📋 Objective Steps (User Goals)")
 
                 # Step 2: 現在の目標ステップに基づいて実行計画を作成
                 current_objective = objective_progress.get_current_step()
@@ -742,16 +711,11 @@ def create_workflow_functions(
                     tool_callback.set_execution_progress(execution_progress["progress"])
                     
                     elapsed = time.time() - start_time
-                    allure.attach(
+                    SLog.attach_text(
                         f"ブロッキングダイアログ検出: {screen_analysis.blocking_dialogs}\nダイアログ処理ステップ: {dialog_plan}",
-                        name="🔒 Dialog Handling Mode [Initial]",
-                        attachment_type=allure.attachment_type.TEXT,
+                        "🔒 Dialog Handling Mode [Initial]"
                     )
-                    allure.attach(
-                        f"{elapsed:.3f} seconds",
-                        name=f"⏱️ Plan Step Time : {elapsed:.3f} seconds",
-                        attachment_type=allure.attachment_type.TEXT,
-                    )
+                    SLog.attach_text(f"{elapsed:.3f} seconds", f"⏱️ Plan Step Time : {elapsed:.3f} seconds")
                     
                     return {
                         "plan": dialog_plan,
@@ -799,18 +763,10 @@ def create_workflow_functions(
                 else:
                     formatted_output = formatted_steps
                     
-                allure.attach(
-                    formatted_output,
-                    name=f"🎯Plan [model: {cfg.planner_model}]",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(formatted_output, f"🎯Plan [model: {cfg.planner_model}]")
 
                 elapsed = time.time() - start_time
-                allure.attach(
-                    f"{elapsed:.3f} seconds",
-                    name=f"⏱️ Plan Step Time : {elapsed:.3f} seconds",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(f"{elapsed:.3f} seconds", f"⏱️ Plan Step Time : {elapsed:.3f} seconds")
 
                 # 初回画像をキャッシュに保存
                 image_cache["previous_image_url"] = image_url
@@ -829,11 +785,7 @@ def create_workflow_functions(
             except Exception as e:
                 SLog.error(LogCategory.PLAN, LogEvent.FAIL, {"error": str(e)}, f"plan_stepでエラー: {e}")
                 elapsed = time.time() - start_time
-                allure.attach(
-                    f"{elapsed:.3f} seconds",
-                    name=f"Plan Step Time : {elapsed:.3f} seconds",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(f"{elapsed:.3f} seconds", f"Plan Step Time : {elapsed:.3f} seconds")
                 # エラー時は例外を再スロー
                 raise
 
@@ -865,19 +817,11 @@ def create_workflow_functions(
             
             # 進捗サマリーをAllureに添付
             if progress_summary:
-                allure.attach(
-                    progress_summary,
-                    name="📊 Execution Progress Before Replan",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(progress_summary, "📊 Execution Progress Before Replan")
             
             # 目標進捗をAllureに添付
             if objective_summary:
-                allure.attach(
-                    objective_summary,
-                    name="🎯 Objective Progress Before Replan",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(objective_summary, "🎯 Objective Progress Before Replan")
 
             start_time = time.time()
             # リプラン回数制限チェック
@@ -891,18 +835,13 @@ def create_workflow_functions(
                 elapsed = time.time() - start_time
                 
                 # Allureにリプラン制限到達を記録
-                allure.attach(
+                SLog.attach_text(
                     f"リプラン回数が制限（{max_replan_count}回）に達しました。\n"
                     f"完了ステップ数: {len(state['past_steps'])}\n"
                     f"テストは失敗として終了します。",
-                    name="⚠️ リプラン回数制限到達",
-                    attachment_type=allure.attachment_type.TEXT,
+                    "⚠️ リプラン回数制限到達"
                 )
-                allure.attach(
-                    f"{elapsed:.3f} seconds",
-                    name="🧠 Replan Step Time",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(f"{elapsed:.3f} seconds", "🧠 Replan Step Time")
                 
                 # 結果メッセージを構築（LLM分析は呼び出さない）
                 response_message = f"""## リプラン回数制限到達
@@ -926,28 +865,14 @@ def create_workflow_functions(
 
                 if ui_elements:
                     # ログとAllureには整形したロケーター情報を出力
-                    allure.attach(
-                        ui_elements,
-                        name="📍 Locator Information",
-                        attachment_type=allure.attachment_type.TEXT
-                    )
+                    SLog.attach_locator_info(ui_elements, "Locator Information")
 
                 # 前回画像がある場合は比較用として添付
                 if previous_image_url:
-                    allure.attach(
-                        base64.b64decode(
-                            previous_image_url.replace("data:image/jpeg;base64,", "")
-                        ),
-                        name="📷 Previous Screenshot (Before Action)",
-                        attachment_type=allure.attachment_type.JPG,
-                    )
+                    SLog.attach_screenshot(previous_image_url, label="Previous Screenshot (Before Action)")
 
                 # 現在画像を添付
-                allure.attach(
-                    base64.b64decode(image_url.replace("data:image/jpeg;base64,", "")),
-                    name="📷 Current Screenshot (After Action)",
-                    attachment_type=allure.attachment_type.JPG,
-                )
+                SLog.attach_screenshot(image_url, label="Current Screenshot (After Action)")
 
                 # 前回画像と現在画像を使ってリプラン
                 replan_result = await planner.replan(
@@ -968,10 +893,9 @@ def create_workflow_functions(
                 objective_progress = objective_progress_cache.get("progress")
 
                 if isinstance(replan_result.action, Response):
-                    allure.attach(
+                    SLog.attach_text(
                         f"Status: {replan_result.action.status}\n\nReason:\n{replan_result.action.reason}",
-                        name="Replan Response",
-                        attachment_type=allure.attachment_type.TEXT,
+                        "Replan Response"
                     )
 
                     evaluated_response = f"{replan_result.action.reason}\n\n{replan_result.action.status}"
@@ -981,11 +905,10 @@ def create_workflow_functions(
                         if objective_progress and not objective_progress.is_all_objectives_completed():
                             remaining_count = objective_progress.get_total_objectives_count() - objective_progress.get_completed_objectives_count()
                             SLog.warn(LogCategory.OBJECTIVE, LogEvent.UPDATE, {"remaining": remaining_count, "total": objective_progress.get_total_objectives_count()}, f"警告: {remaining_count}個の目標が未達成ですがPASSが返されました")
-                            allure.attach(
+                            SLog.attach_text(
                                 f"警告: 目標ステップが{remaining_count}個未達成ですが、LLMがPASSを返しました。\n"
                                 f"達成済み: {objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()}",
-                                name="⚠️ 目標未達成警告",
-                                attachment_type=allure.attachment_type.TEXT,
+                                "⚠️ 目標未達成警告"
                             )
                             # PASSをFAILに変更
                             evaluated_response = evaluated_response.replace(RESULT_PASS, RESULT_FAIL)
@@ -1012,11 +935,7 @@ def create_workflow_functions(
                             state_analysis,
                         )
 
-                    allure.attach(
-                        evaluated_response,
-                        name=f"Final Evalution [model: {cfg.evaluation_model}]",
-                        attachment_type=allure.attachment_type.TEXT,
-                    )
+                    SLog.attach_text(evaluated_response, f"Final Evalution [model: {cfg.evaluation_model}]")
 
                     # PASSでない場合は原因分析を実行
                     if RESULT_PASS not in evaluated_response:
@@ -1039,21 +958,13 @@ def create_workflow_functions(
                         SLog.debug(LogCategory.TEST, LogEvent.FAIL, {"analysis": analysis_result}, None)
                         
                         # Allureに分析結果を添付
-                        allure.attach(
-                            analysis_result,
-                            name="🔍 テスト失敗 - 原因分析",
-                            attachment_type=allure.attachment_type.TEXT,
-                        )
+                        SLog.attach_text(analysis_result, "🔍 テスト失敗 - 原因分析")
                         
                         # 分析結果を含めたレスポンスを構築
                         evaluated_response = f"""{evaluated_response}\n---\n{analysis_result}"""
 
                     elapsed = time.time() - start_time
-                    allure.attach(
-                        f"{elapsed:.3f} seconds",
-                        name="⏱️ Replan Step Time",
-                        attachment_type=allure.attachment_type.TEXT,
-                    )
+                    SLog.attach_text(f"{elapsed:.3f} seconds", "⏱️ Replan Step Time")
                     return {
                         "response": evaluated_response,
                         "replan_count": current_replan_count + 1,
@@ -1066,17 +977,9 @@ def create_workflow_functions(
                     else:
                         formatted_output = formatted_steps
                         
-                    allure.attach(
-                        formatted_output,
-                        name=f"🧠 Replan Steps [model: {cfg.planner_model}]",
-                        attachment_type=allure.attachment_type.TEXT,
-                    )
+                    SLog.attach_text(formatted_output, f"🧠 Replan Steps [model: {cfg.planner_model}]")
                     elapsed = time.time() - start_time
-                    allure.attach(
-                        f"{elapsed:.3f} seconds",
-                        name="⏱️ Replan Step Time",
-                        attachment_type=allure.attachment_type.TEXT,
-                    )
+                    SLog.attach_text(f"{elapsed:.3f} seconds", "⏱️ Replan Step Time")
                     
                     # リプラン後の新しい計画で進捗を更新
                     # 注意: リプランは残りステップの再計画なので、完了済みステップは保持
@@ -1107,11 +1010,7 @@ def create_workflow_functions(
             except Exception as e:
                 SLog.error(LogCategory.REPLAN, LogEvent.FAIL, {"error": str(e)}, f"Error in replan_step: {e}")
                 elapsed = time.time() - start_time
-                allure.attach(
-                    f"{elapsed:.3f} seconds",
-                    name="⏱️ Replan Step Time",
-                    attachment_type=allure.attachment_type.TEXT,
-                )
+                SLog.attach_text(f"{elapsed:.3f} seconds", "⏱️ Replan Step Time")
                 # エラーの場合は終了
                 return {
                     "response": f"エラーが発生しました: {str(e)}",

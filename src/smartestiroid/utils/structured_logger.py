@@ -9,7 +9,7 @@
     # 初期化（テスト開始時）
     SLog.init("TEST_0001", Path("logs"))
 
-    # ログ出力
+    # ログ出力（基本）
     SLog.log(
         category=LogCategory.STEP,
         event=LogEvent.START,
@@ -19,12 +19,67 @@
 
     # 終了（テスト終了時）
     SLog.close()
+
+====================================
+⚠️ 重要: SLog.error / SLog.warn / SLog.info の引数順序
+====================================
+
+すべてのログメソッドは以下の引数順序を持ちます:
+
+    SLog.error(category, event, data, message)
+    SLog.warn(category, event, data, message)
+    SLog.info(category, event, data, message)
+    SLog.debug(category, event, data, message)
+
+【正しい使い方】
+    SLog.error(
+        LogCategory.PLAN,      # 1. category（必須）
+        LogEvent.FAIL,         # 2. event（必須）
+        {"error": str(e)},     # 3. data（オプション）
+        "エラーメッセージ"      # 4. message（オプション）
+    )
+
+【よくある間違い - 絶対に書いてはいけない】
+    # ❌ NG: categoryとeventが欠落
+    SLog.error({"error": str(e)}, "メッセージ")
+    
+    # ❌ NG: dataをcategoryに渡している
+    SLog.warn({"key": "value"}, "メッセージ")
+
+【例外ハンドラでの典型的な使い方】
+    except Exception as e:
+        SLog.error(
+            LogCategory.PLAN,
+            LogEvent.FAIL,
+            {"error_type": type(e).__name__, "error": str(e)},
+            f"処理に失敗: {e}"
+        )
 """
 
 import json
+import base64
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, TextIO
+
+# Allure のインポート（オプショナル）
+try:
+    import allure
+    ALLURE_AVAILABLE = True
+except ImportError:
+    allure = None
+    ALLURE_AVAILABLE = False
+
+
+@dataclass
+class AttachConfig:
+    """カテゴリ別のAllure attach設定"""
+    enabled: bool = True                    # attachするか
+    attachment_type: str = "TEXT"           # TEXT, PNG, JPG, JSON
+    name_template: str = "{icon} {category}: {event}"  # attach名テンプレート
+    include_data: bool = True               # dataをattachに含めるか
+    include_message: bool = True            # messageをattachに含めるか
 
 
 class LogCategory:
@@ -144,6 +199,79 @@ class StructuredLogger:
         "TOKEN": "[TOKEN]",
     }
 
+    # カテゴリ別のAllure attach設定
+    ATTACH_CONFIG: Dict[str, AttachConfig] = {
+        # === テスト実行 ===
+        "TEST": AttachConfig(
+            enabled=True,
+            name_template="{icon} Test: {event}",
+        ),
+        "STEP": AttachConfig(
+            enabled=True,
+            name_template="{icon} Step: {message_short}",
+        ),
+        "TOOL": AttachConfig(
+            enabled=False,  # ツール詳細はAllureLoggerで処理
+        ),
+        
+        # === LLM関連 ===
+        "LLM": AttachConfig(
+            enabled=True,
+            name_template="{icon} LLM: {event}",
+        ),
+        "PLAN": AttachConfig(
+            enabled=True,
+            name_template="📋 Plan: {event}",
+        ),
+        "REPLAN": AttachConfig(
+            enabled=True,
+            name_template="🔄 Replan: {event}",
+        ),
+        "ANALYZE": AttachConfig(
+            enabled=True,
+            name_template="🔍 Analysis: {event}",
+        ),
+        "DECIDE": AttachConfig(
+            enabled=True,
+            name_template="⚖️ Decision: {event}",
+        ),
+        
+        # === 進捗管理 ===
+        "PROGRESS": AttachConfig(
+            enabled=True,
+            name_template="📊 Progress: {event}",
+        ),
+        "OBJECTIVE": AttachConfig(
+            enabled=True,
+            name_template="🎯 Objective: {event}",
+        ),
+        
+        # === 画面関連 ===
+        "SCREEN": AttachConfig(
+            enabled=True,
+            name_template="📱 Screen: {event}",
+        ),
+        "DIALOG": AttachConfig(
+            enabled=True,
+            name_template="🔒 Dialog: {event}",
+        ),
+        
+        # === システム ===
+        "SESSION": AttachConfig(
+            enabled=False,  # セッション管理はattach不要
+        ),
+        "CONFIG": AttachConfig(
+            enabled=False,  # 設定はattach不要
+        ),
+        "ERROR": AttachConfig(
+            enabled=True,
+            name_template="❌ Error: {event}",
+        ),
+        "TOKEN": AttachConfig(
+            enabled=False,  # トークン使用量はattach不要
+        ),
+    }
+
     @classmethod
     def init(cls, test_id: str, output_dir: Optional[Path] = None):
         """ログファイルを初期化
@@ -198,9 +326,10 @@ class StructuredLogger:
         event: str,
         data: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None,
-        level: str = "INFO"
+        level: str = "INFO",
+        attach_to_allure: bool = True
     ):
-        """ログを出力（コンソール + ファイル）
+        """ログを出力（コンソール + ファイル + Allure）
 
         Args:
             category: ログカテゴリ (TEST, STEP, TOOL, LLM, etc.)
@@ -208,11 +337,11 @@ class StructuredLogger:
             data: 構造化データ (dict)
             message: 人間向けサマリメッセージ
             level: ログレベル (DEBUG, INFO, WARN, ERROR)
+            attach_to_allure: Allureにattachするか（デフォルトTrue）
         """
         if not cls._enabled:
             return
 
-        timestamp = datetime.now().strftime("%H:%M:%S")
         timestamp_full = datetime.now().isoformat()
 
         # === ファイル出力（JSON Lines） ===
@@ -235,6 +364,110 @@ class StructuredLogger:
             icon = cls._get_icon(event, level)
             prefix = cls.CATEGORY_PREFIX.get(category, f"[{category}]")
             print(f"{icon} {prefix} {message}")
+
+        # === Allure attach ===
+        if attach_to_allure:
+            cls._attach_to_allure(category, event, data, message, level)
+
+    @classmethod
+    def _attach_to_allure(
+        cls,
+        category: str,
+        event: str,
+        data: Optional[Dict[str, Any]] = None,
+        message: Optional[str] = None,
+        level: str = "INFO"
+    ) -> None:
+        """Allure にデータをattachする
+        
+        Args:
+            category: ログカテゴリ
+            event: イベント種別
+            data: 構造化データ
+            message: メッセージ
+            level: ログレベル
+        """
+        if not ALLURE_AVAILABLE or allure is None:
+            return
+        
+        # 設定を取得
+        config = cls.ATTACH_CONFIG.get(category)
+        if config is None or not config.enabled:
+            return
+        
+        try:
+            # アイコンを取得
+            icon = cls._get_icon(event, level)
+            
+            # 短縮メッセージ（テンプレート用）
+            message_short = (message[:50] + "...") if message and len(message) > 50 else (message or event)
+            
+            # attach名を生成
+            name = config.name_template.format(
+                icon=icon,
+                category=category,
+                event=event,
+                message_short=message_short,
+                level=level
+            )
+            
+            # === 画像データの特別処理 ===
+            if data:
+                # screenshot_base64 があれば画像としてattach
+                if "screenshot_base64" in data:
+                    try:
+                        image_bytes = base64.b64decode(
+                            data["screenshot_base64"]
+                            .replace("data:image/jpeg;base64,", "")
+                            .replace("data:image/png;base64,", "")
+                        )
+                        allure.attach(
+                            image_bytes,
+                            name=f"📷 {message_short}" if message else "📷 Screenshot",
+                            attachment_type=allure.attachment_type.PNG
+                        )
+                    except Exception:
+                        pass  # 画像デコード失敗は無視
+                    
+                    # screenshot_base64以外のデータがあれば続行
+                    data_without_screenshot = {k: v for k, v in data.items() if k != "screenshot_base64"}
+                    if not data_without_screenshot and not message:
+                        return  # 他にattachするものがない
+                    data = data_without_screenshot
+                
+                # image_path があれば画像ファイルをattach
+                if "image_path" in data:
+                    try:
+                        image_path = Path(data["image_path"])
+                        if image_path.exists():
+                            allure.attach.file(
+                                str(image_path),
+                                name=f"📷 {data.get('label', 'Screenshot')}",
+                                attachment_type=allure.attachment_type.PNG
+                            )
+                    except Exception:
+                        pass
+            
+            # === テキストデータのattach ===
+            content_parts = []
+            if config.include_message and message:
+                content_parts.append(message)
+            if config.include_data and data:
+                # 大きなデータは省略
+                data_str = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+                if len(data_str) > 10000:
+                    data_str = data_str[:10000] + "\n... (truncated)"
+                content_parts.append(f"\n--- Data ---\n{data_str}")
+            
+            if content_parts:
+                content = "\n".join(content_parts)
+                allure.attach(
+                    content,
+                    name=name,
+                    attachment_type=allure.attachment_type.TEXT
+                )
+        except Exception:
+            pass  # Allure attach失敗は無視
 
     @classmethod
     def _get_icon(cls, event: str, level: str) -> str:
@@ -282,7 +515,17 @@ class StructuredLogger:
         data: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None
     ):
-        """INFOレベルのログ出力"""
+        """INFOレベルのログ出力
+        
+        Args:
+            category: LogCategory.* (例: LogCategory.STEP, LogCategory.PLAN)
+            event: LogEvent.* (例: LogEvent.START, LogEvent.COMPLETE)
+            data: 追加データ（辞書）
+            message: 人間向けメッセージ
+        
+        Example:
+            SLog.info(LogCategory.STEP, LogEvent.START, {"step": "click"}, "ステップ開始")
+        """
         cls.log(category, event, data, message, level="INFO")
 
     @classmethod
@@ -293,7 +536,21 @@ class StructuredLogger:
         data: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None
     ):
-        """WARNレベルのログ出力"""
+        """WARNレベルのログ出力
+        
+        Args:
+            category: LogCategory.* (例: LogCategory.SCREEN, LogCategory.REPLAN)
+            event: LogEvent.* (例: LogEvent.RETRY, LogEvent.SKIP)
+            data: 追加データ（辞書）
+            message: 人間向けメッセージ
+        
+        Example:
+            SLog.warn(LogCategory.SCREEN, LogEvent.RETRY, {"count": 2}, "リトライ中")
+        
+        ⚠️ 注意: 最初の2引数(category, event)は必須です。
+           ❌ 誤: SLog.warn({"key": "val"}, "msg")
+           ✅ 正: SLog.warn(LogCategory.X, LogEvent.Y, {"key": "val"}, "msg")
+        """
         cls.log(category, event, data, message, level="WARN")
 
     @classmethod
@@ -304,7 +561,27 @@ class StructuredLogger:
         data: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None
     ):
-        """ERRORレベルのログ出力"""
+        """ERRORレベルのログ出力
+        
+        Args:
+            category: LogCategory.* (例: LogCategory.PLAN, LogCategory.OBJECTIVE)
+            event: LogEvent.* (例: LogEvent.FAIL)
+            data: 追加データ（辞書）- 通常 {"error": str(e)} など
+            message: 人間向けメッセージ
+        
+        Example:
+            except Exception as e:
+                SLog.error(
+                    LogCategory.PLAN,
+                    LogEvent.FAIL,
+                    {"error_type": type(e).__name__, "error": str(e)},
+                    f"計画生成失敗: {e}"
+                )
+        
+        ⚠️ 注意: 最初の2引数(category, event)は必須です。
+           ❌ 誤: SLog.error({"error": str(e)}, "msg")
+           ✅ 正: SLog.error(LogCategory.X, LogEvent.FAIL, {"error": str(e)}, "msg")
+        """
         cls.log(category, event, data, message, level="ERROR")
 
     @classmethod
@@ -397,7 +674,6 @@ class StructuredLogger:
         Returns:
             保存した画像ファイルのパス（失敗時はNone）
         """
-        import base64
         try:
             image_data = base64.b64decode(base64_data)
             return cls.save_screenshot(image_data, category, event, label, message)
@@ -409,6 +685,96 @@ class StructuredLogger:
                 message=f"Base64 decode failed: {e}"
             )
             return None
+
+    @classmethod
+    def attach_screenshot(
+        cls,
+        base64_data: str,
+        label: Optional[str] = None,
+        message: Optional[str] = None
+    ) -> Optional[Path]:
+        """スクリーンショットを保存してAllureにもattach
+        
+        Args:
+            base64_data: Base64エンコードされた画像（data:image/...形式も可）
+            label: 画像ラベル
+            message: ログメッセージ
+            
+        Returns:
+            保存したファイルのパス
+        """
+        # data URL形式の場合はプレフィックスを除去
+        clean_data = (base64_data
+            .replace("data:image/jpeg;base64,", "")
+            .replace("data:image/png;base64,", ""))
+        
+        # ファイルに保存（これ自体がAllure attachも行う）
+        path = cls.save_screenshot_base64(
+            clean_data,
+            category=LogCategory.SCREEN,
+            event=LogEvent.UPDATE,
+            label=label,
+            message=message
+        )
+        
+        return path
+
+    @classmethod
+    def attach_locator_info(
+        cls,
+        ui_elements: str,
+        label: str = "Locator Information"
+    ) -> None:
+        """ロケーター情報をログとAllureに出力
+        
+        Args:
+            ui_elements: UIエレメント情報（XML等）
+            label: ラベル
+        """
+        # ログ出力（Allure attachは内部で自動実行）
+        cls.debug(
+            category=LogCategory.SCREEN,
+            event=LogEvent.UPDATE,
+            data={"locator_info_length": len(ui_elements)},
+            message=f"📍 {label}"
+        )
+        
+        # debugはattach_to_allureを呼ばないので、別途attachが必要
+        if ALLURE_AVAILABLE and allure is not None:
+            try:
+                allure.attach(
+                    ui_elements,
+                    name=f"📍 {label}",
+                    attachment_type=allure.attachment_type.TEXT
+                )
+            except Exception:
+                pass
+
+    @classmethod
+    def attach_text(
+        cls,
+        content: str,
+        name: str,
+        category: str = "STEP",
+        event: str = "UPDATE"
+    ) -> None:
+        """テキストをAllureに直接attach（ログ出力なし）
+        
+        Args:
+            content: attachするテキスト内容
+            name: attach名
+            category: ログカテゴリ（設定参照用）
+            event: イベント種別
+        """
+        if ALLURE_AVAILABLE and allure is not None:
+            try:
+                allure.attach(
+                    content,
+                    name=name,
+                    attachment_type=allure.attachment_type.TEXT
+                )
+            except Exception:
+                pass
 
 
 # エイリアス（簡潔な呼び出し用）

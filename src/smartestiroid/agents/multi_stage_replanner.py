@@ -415,8 +415,8 @@ class MultiStageReplanner:
             return decision_norm, result.reason.strip()
         except Exception as e:
             # 構造化出力失敗時は安全側でPLANを返す
-            SLog.error({"error": str(e)}, "Structured Output Error")
-            allure.attach(str(e), name="❌ decide_action: Structured Output Error", attachment_type=allure.attachment_type.TEXT)
+            SLog.error(LogCategory.DECIDE, LogEvent.FAIL, {"error": str(e)}, "Structured Output Error")
+            SLog.attach_text(str(e), "❌ decide_action: Structured Output Error")
             return "PLAN", "構造化出力エラーのためフォールバック"
     
     async def build_plan(
@@ -589,7 +589,7 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
             }, f"生成: {len(plan.steps)}ステップ")
             return plan.steps
         except Exception as e:
-            SLog.error({"error": str(e)}, "ダイアログステップ生成エラー")
+            SLog.error(LogCategory.DIALOG, LogEvent.FAIL, {"error": str(e)}, "ダイアログステップ生成エラー")
             # フォールバック: blocking_dialogsに記載されたresource-idを使ってタップ
             if state_analysis.blocking_dialogs:
                 fallback_step = f"resource-id '{state_analysis.blocking_dialogs}' をタップしてダイアログを閉じる"
