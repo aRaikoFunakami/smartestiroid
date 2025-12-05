@@ -4,7 +4,7 @@ ExecutionProgress と関連モデルのテスト
 
 import pytest
 import time
-from smartestiroid.models import (
+from smartestiroid.progress import (
     ToolCallRecord,
     StepExecutionRecord,
     ExecutionProgress,

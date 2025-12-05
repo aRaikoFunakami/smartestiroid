@@ -10,7 +10,8 @@ from colorama import Fore
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END
 
-from .models import PlanExecute, Response, ExecutionProgress, ObjectiveProgress
+from .models import PlanExecute, Response
+from .progress import ExecutionProgress, ObjectiveProgress, ExecutedAction
 from .config import KNOWHOW_INFO, RESULT_PASS, RESULT_FAIL
 # モデル変数（planner_model等）は pytest_configure で動的に変更されるため、
 # 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
@@ -132,6 +133,170 @@ async def analyze_test_failure(
         return response.content
     except Exception as e:
         return f"原因分析中にエラーが発生しました: {str(e)}"
+
+
+async def evaluate_step_execution(
+    llm,
+    step_description: str,
+    agent_response: str,
+    tool_calls_summary: str,
+    token_callback=None
+):
+    """ステップ実行結果をLLMで評価する（Phase 1: Executor自己評価）
+    
+    Args:
+        llm: 評価に使用するLLM
+        step_description: 実行しようとしたステップの説明
+        agent_response: エージェントの応答内容
+        tool_calls_summary: 実行されたツール呼び出しの要約
+        token_callback: トークンカウンターコールバック
+    
+    Returns:
+        StepExecutionResult: 構造化された実行結果
+    """
+    from .models import StepExecutionResult
+    
+    prompt = f"""あなたはステップ実行結果を評価するエキスパートです。
+
+【実行しようとしたステップ】
+{step_description}
+
+【エージェントの応答】
+{agent_response}
+
+【実行されたツール呼び出し】
+{tool_calls_summary}
+
+【評価基準】
+以下の基準で success を判断してください：
+
+success = True の条件:
+- 意図したツールが正常に呼び出された
+- ツールの実行結果がエラーを含まない
+- 画面操作が完了した（タップ、入力など）
+- find系ツールで要素が見つかった
+
+success = False の条件:
+- 要素が見つからなかった（element not found, no element found など）
+- ツールの実行がエラーで失敗した
+- タイムアウトが発生した
+- 操作対象が特定できなかった
+- ツールが呼び出されなかった（確認ステップを除く）
+
+【出力フィールドの説明】
+- success: 上記基準で判断
+- reason: 成功/失敗の具体的な理由
+- executed_action: 実際に実行した操作（例：'resource-id xxx をタップした'）
+- expected_screen_change: ★重要★ あなたは実行後の画面を確認できません。
+  操作後に**期待される**画面変化を記述してください。
+  例：'ホーム画面に遷移する'、'ダイアログが表示される'、'テキストが入力される'
+- no_page_source_change: page_sourceに影響を与えないツールのみを実行した場合は True。
+  例：find_element, verify_screen_content, get_page_source, screenshot 等の確認・取得系ツール。
+  これらのツールは画面状態を変更しないため、検証LLMはこのフラグを参照して判断を調整します。
+
+【出力形式】
+厳格なJSON形式
+"""
+    
+    structured_llm = llm.with_structured_output(StepExecutionResult)
+    
+    if token_callback:
+        with token_callback.track_query():
+            result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
+    else:
+        result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
+    
+    return result
+
+
+async def verify_step_execution(
+    llm,
+    step_description: str,
+    execution_result,
+    page_source_after: str,
+    screenshot_url_after: str = "",
+    token_callback=None
+):
+    """ステップ実行結果を検証LLMで検証する（Phase 2: 独立検証）
+    
+    Args:
+        llm: 検証に使用するLLM
+        step_description: 実行しようとしたステップの説明
+        execution_result: Phase 1の実行結果（StepExecutionResult）
+        page_source_after: 実行後のpage_source
+        screenshot_url_after: 実行後のスクリーンショットURL
+        token_callback: トークンカウンターコールバック
+    
+    Returns:
+        StepVerificationResult: 検証結果
+    """
+    from .models import StepVerificationResult
+    
+    # page_sourceに影響がないツールのみの場合は検証方針が異なる
+    no_page_source_change = getattr(execution_result, 'no_page_source_change', False)
+    expected_change = getattr(execution_result, 'expected_screen_change', None) or "不明"
+    
+    if no_page_source_change:
+        no_change_note = """\n★重要★ page_sourceに影響がないツールの実行について:
+Executorは find_element, verify_screen_content, get_page_source, screenshot 等の
+確認・取得系ツールのみを実行しました。
+この場合、画面変化は発生しません。Executorの成功/失敗判定（要素が見つかったかどうか）を
+そのまま信頼してください。page_source で該当要素の存在を確認するだけで十分です。
+"""
+    else:
+        no_change_note = ""
+    
+    prompt = f"""あなたはステップ実行結果を**独立して検証する**エキスパートです。
+
+【検証対象ステップ】
+{step_description}
+
+【Executorの自己評価】
+- 成功判定: {"成功" if execution_result.success else "失敗"}
+- 判断理由: {execution_result.reason}
+- 実行した操作: {execution_result.executed_action}
+- 期待される画面変化: {expected_change}
+- page_sourceに影響なし: {"はい" if no_page_source_change else "いいえ"}
+{no_change_note}
+【実行後の画面状態（page_source）】
+{page_source_after}
+
+【検証タスク】
+Executorの自己評価が正しいかを、実行後の画面状態と突き合わせて検証してください。
+
+★重要★ 以下の観点で検証:
+1. ステップの意図した操作が実際に完了しているか
+2. page_source の内容がステップ実行後の期待状態と一致するか
+3. Executorの「成功」判定に矛盾がないか
+
+例:
+- 「ホームタブをタップする」→ page_source で該当タブが selected="true" か確認
+- 「検索ボックスに入力する」→ page_source で入力テキストが反映されているか確認
+- 「ボタンをタップする」→ 画面遷移またはダイアログ表示があるか確認
+- 「要素を確認する」（find系）→ page_source に該当要素が存在するか確認
+
+★矛盾の例★:
+- Executorが「成功」と言っているが、page_source に該当要素がない
+- 「タップした」と言っているが、期待した画面変化がない
+- 「入力した」と言っているが、テキストが反映されていない
+
+【出力形式】
+厳格なJSON形式
+"""
+
+    content_blocks = [{"type": "text", "text": prompt}]
+    if screenshot_url_after:
+        content_blocks.append({"type": "image_url", "image_url": {"url": screenshot_url_after}})
+    
+    structured_llm = llm.with_structured_output(StepVerificationResult)
+    
+    if token_callback:
+        with token_callback.track_query():
+            result = await structured_llm.ainvoke([HumanMessage(content=content_blocks)])
+    else:
+        result = await structured_llm.ainvoke([HumanMessage(content=content_blocks)])
+    
+    return result
 
 
 def create_workflow_functions(
@@ -290,40 +455,160 @@ def create_workflow_functions(
                     attachment_type=allure.attachment_type.TEXT,
                 )
 
-                # ステップ完了を記録
-                tool_callback.complete_step(
-                    agent_response["messages"][-1].content,
-                    success=True
-                )
-
                 # ツール呼び出し履歴を Allure に保存
                 tool_callback.save_to_allure(step_name=task)
-                tool_callback.clear()
-
+                
                 allure.attach(
                     agent_response["messages"][-1].content,
                     name=f"Response [model: {cfg.execution_model}]",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+                
+                # === Phase 1: Executor自己評価 ===
+                print(Fore.CYAN + f"🔍 Phase 1: ステップ実行結果を評価中...")
+                tool_calls_summary = tool_callback.get_summary() if hasattr(tool_callback, 'get_summary') else "N/A"
+                
+                evaluation_result = await evaluate_step_execution(
+                    llm=planner.llm,  # Plannerと同じLLMを使用
+                    step_description=task,
+                    agent_response=agent_response["messages"][-1].content,
+                    tool_calls_summary=tool_calls_summary,
+                    token_callback=token_callback
+                )
+                
+                print(Fore.CYAN + f"  📊 Executor評価: success={evaluation_result.success}, reason={evaluation_result.reason[:100]}...")
+                allure.attach(
+                    f"success: {evaluation_result.success}\nreason: {evaluation_result.reason}\nexecuted_action: {evaluation_result.executed_action}\nexpected_screen_change: {evaluation_result.expected_screen_change}\nno_page_source_change: {evaluation_result.no_page_source_change}",
+                    name="📊 Phase 1: Executor Self-Evaluation",
+                    attachment_type=allure.attachment_type.TEXT,
+                )
+                
+                # === Phase 2: 独立検証（Executor評価がTrueの場合のみ） ===
+                step_success = False
+                verification_result = None
+                
+                if evaluation_result.success:
+                    print(Fore.CYAN + f"🔍 Phase 2: 検証LLMによる独立検証中...")
+                    
+                    # 実行後の画面状態を取得
+                    page_source_after = await get_page_source_tool.ainvoke({})
+                    screenshot_after = await screenshot_tool.ainvoke({"as_data_url": True})
+                    
+                    verification_result = await verify_step_execution(
+                        llm=planner.llm,  # 検証にも同じLLMを使用（別モデルにする場合は要変更）
+                        step_description=task,
+                        execution_result=evaluation_result,
+                        page_source_after=page_source_after,
+                        screenshot_url_after=screenshot_after,
+                        token_callback=token_callback
+                    )
+                    
+                    print(Fore.CYAN + f"  ✅ 検証結果: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
+                    allure.attach(
+                        f"verified: {verification_result.verified}\nconfidence: {verification_result.confidence}\nreason: {verification_result.reason}\ndiscrepancy: {verification_result.discrepancy or 'None'}",
+                        name="✅ Phase 2: Independent Verification",
+                        attachment_type=allure.attachment_type.TEXT,
+                    )
+                    
+                    # 両方がTrueで確信度が0.7以上の場合のみ成功とする
+                    step_success = verification_result.verified and verification_result.confidence >= 0.7
+                    
+                    if not step_success:
+                        print(Fore.YELLOW + f"  ⚠️ 検証失敗: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
+                        if verification_result.discrepancy:
+                            print(Fore.YELLOW + f"  矛盾点: {verification_result.discrepancy}")
+                else:
+                    print(Fore.YELLOW + f"  ⚠️ Executor評価が失敗のため、検証をスキップ")
+                    step_success = False
+                
+                # ステップ完了を記録（評価結果に基づく）
+                tool_callback.complete_step(
+                    agent_response["messages"][-1].content,
+                    success=step_success
+                )
+                tool_callback.clear()
+                
                 elapsed = time.time() - start_time
                 allure.attach(
                     f"{elapsed:.3f} seconds",
                     name="⏱️Execute Step Time",
                     attachment_type=allure.attachment_type.TEXT,
                 )
+                
+                # 最終的な成功/失敗を記録
+                final_status = "✅ SUCCESS" if step_success else "❌ FAILED"
+                print(Fore.GREEN + f"  {final_status}: ステップ '{task}'")
+                allure.attach(
+                    f"Status: {final_status}\nPhase1 (Executor): success={evaluation_result.success}\nPhase2 (Verification): verified={verification_result.verified if verification_result else 'N/A'}, confidence={verification_result.confidence if verification_result else 'N/A'}",
+                    name=f"{final_status} Step Result",
+                    attachment_type=allure.attachment_type.TEXT,
+                )
 
-                # 実行されたステップを履歴に追加
+                # 実行されたステップを履歴に追加（評価結果に基づく）
                 step_history["executed_steps"].append(
                     {
                         "step": task,
                         "response": agent_response["messages"][-1].content,
                         "timestamp": time.time(),
-                        "success": True,
+                        "success": step_success,
+                        "evaluation": {
+                            "executor_success": evaluation_result.success,
+                            "executor_reason": evaluation_result.reason,
+                            "verified": verification_result.verified if verification_result else None,
+                            "verification_confidence": verification_result.confidence if verification_result else None,
+                        }
                     }
                 )
+                
+                # ObjectiveProgressの実行計画を1ステップ進める & アクション履歴を記録
+                # ★ 成功した場合のみ進める ★
+                if step_success and objective_progress_cache["progress"]:
+                    current_obj_step = objective_progress_cache["progress"].get_current_step()
+                    if current_obj_step:
+                        # 実行済みアクションを記録
+                        last_tool = None
+                        if hasattr(tool_callback, 'get_last_tool_name'):
+                            last_tool = tool_callback.get_last_tool_name()
+                        current_obj_step.executed_actions.append(ExecutedAction(
+                            action=task,
+                            tool_name=last_tool or "unknown",
+                            result=agent_response["messages"][-1].content[:500],
+                            success=True
+                        ))
+                    
+                    # ★ ダイアログ処理モード分岐 ★
+                    if objective_progress_cache["progress"].is_handling_dialog():
+                        # ダイアログ処理中 → execution_plan_indexは進めない
+                        objective_progress_cache["progress"].increment_dialog_handling_count()
+                        dialog_count = objective_progress_cache["progress"].get_dialog_handling_count()
+                        print(Fore.YELLOW + f"🔒 [execute_step] ダイアログ処理ステップ完了 (計{dialog_count}ステップ)")
+                        print(Fore.YELLOW + f"   通常計画は凍結中（indexは進めない）")
+                    else:
+                        # 通常モード → execution_plan_indexを進める
+                        objective_progress_cache["progress"].advance_current_execution_plan()
+                        remaining = len(objective_progress_cache["progress"].get_current_remaining_plan())
+                        print(Fore.CYAN + f"📋 [execute_step] 通常ステップ完了 (残り: {remaining}ステップ)")
+                elif not step_success:
+                    # 失敗した場合もアクション履歴を記録（失敗として）
+                    if objective_progress_cache["progress"]:
+                        current_obj_step = objective_progress_cache["progress"].get_current_step()
+                        if current_obj_step:
+                            last_tool = None
+                            if hasattr(tool_callback, 'get_last_tool_name'):
+                                last_tool = tool_callback.get_last_tool_name()
+                            current_obj_step.executed_actions.append(ExecutedAction(
+                                action=task,
+                                tool_name=last_tool or "unknown",
+                                result=f"FAILED: {evaluation_result.reason}",
+                                success=False
+                            ))
+                    print(Fore.YELLOW + f"⚠️ ステップ失敗のため、計画を進めません。リプランが必要です。")
 
                 return {
                     "past_steps": [(task, agent_response["messages"][-1].content)],
+                    "step_success": step_success,  # ステップ成功フラグを追加
+                    "evaluation_result": evaluation_result,  # 評価結果を追加
+                    "verification_result": verification_result,  # 検証結果を追加
                 }
             except Exception as e:
                 error_msg = str(e)
@@ -409,6 +694,59 @@ def create_workflow_functions(
                 
                 # 画面分析を実行
                 screen_analysis = await planner.analyze_screen(ui_elements, image_url, current_objective.description)
+                
+                # ★ブロッキングダイアログチェック★
+                # blocking_dialogsがある場合はダイアログ処理モードに入り、
+                # 通常計画は生成せずにダイアログ処理のみを行う
+                if screen_analysis.blocking_dialogs:
+                    print(Fore.YELLOW + "=" * 60)
+                    print(Fore.YELLOW + "🔒 [plan_step] ブロッキングダイアログ検出")
+                    print(Fore.YELLOW + f"   検出: {screen_analysis.blocking_dialogs}")
+                    print(Fore.YELLOW + f"   通常計画の生成をスキップし、ダイアログ処理モードへ")
+                    print(Fore.YELLOW + "=" * 60)
+                    
+                    # ダイアログ処理モードに入る
+                    objective_progress.enter_dialog_handling_mode()
+                    
+                    # ダイアログ処理ステップのみを生成（通常計画は空のまま）
+                    dialog_plan = await planner.replanner._generate_dialog_handling_steps(
+                        planner.replanner._create_state_analysis_for_dialog(screen_analysis),
+                        ui_elements
+                    )
+                    
+                    # 空の通常計画を設定（ダイアログ解消後にreplanで生成される）
+                    current_objective.execution_plan = []
+                    
+                    print(Fore.YELLOW + f"🔒 ダイアログ処理ステップ: {len(dialog_plan)}個")
+                    for i, step in enumerate(dialog_plan):
+                        print(Fore.YELLOW + f"  [{i}] {step}")
+                    
+                    # 初回画像をキャッシュに保存
+                    image_cache["previous_image_url"] = image_url
+                    
+                    # ステップ履歴を初期化
+                    step_history["executed_steps"] = []
+                    
+                    # 進捗追跡を初期化
+                    execution_progress["progress"] = ExecutionProgress(original_plan=dialog_plan)
+                    tool_callback.set_execution_progress(execution_progress["progress"])
+                    
+                    elapsed = time.time() - start_time
+                    allure.attach(
+                        f"ブロッキングダイアログ検出: {screen_analysis.blocking_dialogs}\nダイアログ処理ステップ: {dialog_plan}",
+                        name="🔒 Dialog Handling Mode [Initial]",
+                        attachment_type=allure.attachment_type.TEXT,
+                    )
+                    allure.attach(
+                        f"{elapsed:.3f} seconds",
+                        name=f"⏱️ Plan Step Time : {elapsed:.3f} seconds",
+                        attachment_type=allure.attachment_type.TEXT,
+                    )
+                    
+                    return {
+                        "plan": dialog_plan,
+                        "replan_count": 0,
+                    }
                 
                 # Step 2.5: 計画作成前に、目標が既に達成されているか評価
                 pre_eval = await planner.evaluate_objective_completion(
@@ -743,6 +1081,22 @@ def create_workflow_functions(
                         # 新しい計画は「残りのステップ」なので、original_planは更新しない
                         # current_step_indexを調整
                         execution_progress["progress"].current_step_index = completed_count
+                    
+                    # ObjectiveProgressにも新しい実行計画を設定
+                    # ★ ダイアログ処理中は実行計画を更新しない（元の計画を保護）★
+                    if objective_progress_cache["progress"]:
+                        if objective_progress_cache["progress"].is_handling_dialog():
+                            # ダイアログ処理中 → execution_planは更新しない
+                            dialog_count = objective_progress_cache["progress"].get_dialog_handling_count()
+                            print(Fore.YELLOW + f"🔒 [replan_step] ダイアログ処理モード")
+                            print(Fore.YELLOW + f"   ダイアログ処理ステップ: {len(new_plan)}個を実行予定")
+                            print(Fore.YELLOW + f"   累計ダイアログ処理: {dialog_count}ステップ完了")
+                            print(Fore.YELLOW + f"   通常計画は凍結中（更新しない）")
+                        else:
+                            # 通常モード → 実行計画を更新
+                            objective_progress_cache["progress"].set_current_execution_plan(new_plan)
+                            print(Fore.CYAN + f"📋 [replan_step] 通常処理モード")
+                            print(Fore.CYAN + f"   新しい実行計画: {len(new_plan)}ステップ")
                     
                     return {
                         "plan": new_plan,

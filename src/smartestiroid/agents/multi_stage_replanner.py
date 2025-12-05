@@ -10,7 +10,8 @@ from colorama import Fore
 from langchain_core.messages import HumanMessage
 import allure
 
-from ..models import Plan, Response, DecisionResult, ObjectiveStep, ObjectiveProgress
+from ..models import Plan, Response, DecisionResult
+from ..progress import ObjectiveStep, ObjectiveProgress
 from ..config import RESULT_PASS, RESULT_FAIL
 
 
@@ -23,27 +24,73 @@ class ObjectiveEvaluation(BaseModel):
 
 
 class StateAnalysis(BaseModel):
-    """リプラン時の画面状態分析結果"""
+    """リプラン時の画面状態分析結果
+    
+    整理済みフィールド（10個）:
+    - 画面状態: screen_changes, current_screen_type, main_elements, blocking_dialogs
+    - 進捗評価: test_progress, problems_detected
+    - アプリ不具合: app_defect_detected, app_defect_reason（stuck状態も含む）
+    - 目標評価: current_objective_achieved, current_objective_evidence
+    - 提案: suggested_next_action
+    
+    削除されたフィールド（導出可能のため）:
+    - goal_achieved → ObjectiveProgress.is_all_objectives_completed()で判断
+    - goal_achievement_reason → current_objective_evidenceで十分
+    - is_stuck → app_defect_reason に "stuck: ..." として統合
+    - plan_still_valid → blocking_dialogs / current_objective_achieved から導出
+    - plan_invalidation_reason → 不要
+    """
+    # 画面状態
     screen_changes: str = Field(description="前ステップからの画面変化と差分（UI要素の追加/削除/変更）")
     current_screen_type: str = Field(description="現在の画面の種類（例：ホーム画面、検索結果、設定画面など）")
     main_elements: str = Field(description="画面上の主要UI要素の説明")
     blocking_dialogs: Optional[str] = Field(default=None, description="目標達成を妨げるダイアログやオーバーレイがある場合、その内容と閉じるためのボタンのresource-id（例：'利用規約ダイアログ、閉じるボタン: com.example:id/agree_button'）")
+    
+    # 進捗評価
     test_progress: str = Field(description="テスト進捗の評価（定量的または定性的）")
     problems_detected: Optional[str] = Field(default=None, description="異常挙動・エラー・予期しない遷移がある場合、その詳細")
     
-    # アプリ不具合の検出（新規追加）
-    app_defect_detected: bool = Field(default=False, description="アプリの不具合が検出されたかどうか（クラッシュ、フリーズ、予期しないエラー、操作不能など）")
-    app_defect_reason: Optional[str] = Field(default=None, description="アプリ不具合の詳細（検出された場合のみ）")
-    is_stuck: bool = Field(default=False, description="同じ操作を繰り返しても進捗がない状態（スタック状態）かどうか")
+    # アプリ不具合の検出（is_stuckを統合: "stuck: ..." で表現）
+    app_defect_detected: bool = Field(default=False, description="アプリの不具合が検出されたかどうか（クラッシュ、フリーズ、予期しないエラー、操作不能、スタック状態など）")
+    app_defect_reason: Optional[str] = Field(default=None, description="アプリ不具合の詳細（検出された場合のみ）。スタック状態の場合は 'stuck: 詳細' の形式で記載")
     
-    # 目標ステップ単位の評価（新規追加）
+    # 目標ステップ単位の評価
     current_objective_achieved: bool = Field(description="現在の目標ステップが達成されているかどうか")
-    current_objective_evidence: str = Field(description="現在の目標ステップの達成/未達成の根拠")
+    current_objective_evidence: str = Field(description="現在の目標ステップの達成/未達成の根拠（ロケーター情報や画面状態に基づく）")
     
-    # 従来のフィールド（互換性維持）
-    goal_achieved: bool = Field(description="全体の目標が達成されているかどうか")
-    goal_achievement_reason: str = Field(description="目標達成/未達成の判断根拠（ロケーター情報や画面状態に基づく）")
+    # 提案（任意）
     suggested_next_action: Optional[str] = Field(default=None, description="次に実行すべきアクションの提案（任意）")
+    
+    def is_stuck(self) -> bool:
+        """スタック状態かどうかを判定（app_defect_reasonから導出）"""
+        if self.app_defect_reason:
+            return self.app_defect_reason.lower().startswith("stuck:")
+        return False
+    
+    def is_plan_still_valid(self, remaining_steps: int) -> bool:
+        """既存プランが有効かどうかを判定（blocking_dialogs/current_objective_achievedから導出）
+        
+        Args:
+            remaining_steps: 残りステップ数
+        
+        Returns:
+            True: プラン継続可能
+            False: プラン再構築が必要
+        """
+        # ブロッキングダイアログがある → プラン無効（回避操作が必要）
+        if self.blocking_dialogs:
+            return False
+        # 現在の目標ステップが達成された → プラン無効（次の目標用のプランが必要）
+        if self.current_objective_achieved:
+            return False
+        # アプリ不具合が検出された → プラン無効
+        if self.app_defect_detected:
+            return False
+        # 残りステップがない → プラン無効
+        if remaining_steps <= 0:
+            return False
+        # それ以外はプラン継続可能
+        return True
 
 
 class MultiStageReplanner:
@@ -61,9 +108,9 @@ class MultiStageReplanner:
         original_plan: list,
         past_steps: list,
         locator: str,
-        previous_image_url: str = "",
-        current_image_url: str = "",
-        objective_progress: Optional[ObjectiveProgress] = None
+        previous_image_url: str,
+        current_image_url: str,
+        objective_progress: ObjectiveProgress
     ) -> StateAnalysis:
         """ステージ1: 画像（前回/現在）とロケーターから現状を把握
 
@@ -72,66 +119,73 @@ class MultiStageReplanner:
         
         Args:
             goal: 全体の目標
-            original_plan: 元の実行計画
-            past_steps: 完了済みステップ
+            original_plan: 元の実行計画（参照用）
+            past_steps: 完了済みステップ（参照用、全履歴）
             locator: 画面のロケーター情報
             previous_image_url: 前回のスクリーンショット
             current_image_url: 現在のスクリーンショット
-            objective_progress: 目標進捗管理オブジェクト（新規追加）
+            objective_progress: 目標進捗管理オブジェクト（必須）
         """
-        # 進捗情報を計算
-        total_steps = len(original_plan)
-        completed_steps = len(past_steps)
-        remaining_steps = max(total_steps - completed_steps, 0)
+        # 進捗情報を取得
+        current_step = objective_progress.get_current_step()
+        if not current_step:
+            raise ValueError("No current step in ObjectiveProgress")
+        
+        remaining = objective_progress.get_current_remaining_plan()
+        total_steps = len(current_step.execution_plan)
+        remaining_steps = len(remaining)
+        completed_steps = total_steps - remaining_steps
+        dialog_mode = objective_progress.is_handling_dialog()
+        dialog_count = objective_progress.get_dialog_handling_count()
+        
+        # ★ログ出力: ダイアログ処理モードと通常モードで分離
+        print(Fore.CYAN + "=" * 60)
+        if dialog_mode:
+            # ダイアログ処理モード用ログ
+            print(Fore.YELLOW + "[analyze_state] 🔒 ダイアログ処理モード")
+            print(Fore.YELLOW + f"  ダイアログ処理ステップ完了数: {dialog_count}")
+            print(Fore.YELLOW + f"  凍結中の通常計画: {total_steps}ステップ (完了: {completed_steps}, 残り: {remaining_steps})")
+            print(Fore.YELLOW + f"  復帰先の目標: [{current_step.index}] {current_step.description[:60]}...")
+            # 停止位置を表示（次に実行予定だったステップ）
+            if remaining:
+                print(Fore.YELLOW + f"  ⮩ 停止位置 (次に実行予定だったステップ):")
+                print(Fore.YELLOW + f"    [{completed_steps + 1}/{total_steps}] {remaining[0][:70]}...")
+        else:
+            # 通常モード用ログ
+            print(Fore.CYAN + "[analyze_state] 📋 通常処理モード")
+            print(Fore.CYAN + f"  計画ステップ: {total_steps} (完了: {completed_steps}, 残り: {remaining_steps})")
+            print(Fore.CYAN + f"  目標進捗: {objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()} 完了")
+            print(Fore.CYAN + f"  現在の目標: [{current_step.index}] {current_step.description[:60]}...")
+        
+        # 直近の実行ステップ（両モード共通）
+        if past_steps:
+            mode_color = Fore.YELLOW if dialog_mode else Fore.CYAN
+            print(mode_color + f"  直近のステップ (最新3件):")
+            for step, result in past_steps[-3:]:
+                result_short = str(result)[:50] + "..." if len(str(result)) > 50 else str(result)
+                print(mode_color + f"    - {step[:60]}... → {result_short}")
+        print(Fore.CYAN + "=" * 60)
         
         # 目標ステップ情報を構築
-        objective_info = ""
+        # ObjectiveProgress.format_for_llm()を使用して進捗情報を生成
+        progress_info = ""
         current_objective = ""
         if objective_progress:
+            progress_info = objective_progress.format_for_llm()
             current_step = objective_progress.get_current_step()
             if current_step:
                 current_objective = current_step.description
-            
-            # 全目標ステップの一覧
-            objective_list = []
-            for step in objective_progress.objective_steps:
-                status_icon = {
-                    "completed": "✅",
-                    "in_progress": "🔄",
-                    "pending": "⏳",
-                    "failed": "❌",
-                    "skipped": "⏭️"
-                }.get(step.status, "?")
-                type_label = "🎯" if step.step_type == "objective" else "🔧"
-                objective_list.append(f"  {status_icon} {type_label} [{step.index}] {step.description}")
-            
-            objective_info = f"""
-【ユーザー目標ステップ】（これらが達成されたかを評価する基準）
-{chr(10).join(objective_list)}
-
-【現在評価中の目標ステップ】
-{current_objective}
-
-【目標進捗】
-{objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()} 目標完了
-"""
         
         prompt_text = f"""
 あなたは画面状態を分析するエキスパートです。
 
 【全体の目標】
 {goal}
-{objective_info}
 
-【LLM実行計画の進捗】（参考情報：目標達成のために生成された実行手順）
-計画ステップ数: {total_steps}
-完了ステップ数: {completed_steps}
-残りステップ数: {remaining_steps}
-最後の完了ステップ: {past_steps[-1][0] if past_steps else "(なし)"}
+{progress_info}
 
 【重要】評価基準について
-- LLM実行計画の進捗ではなく、「ユーザー目標ステップ」が達成されたかで判断すること
-- 実行計画が全て完了しても、目標ステップが未達成なら「未達成」と判断すること
+- 「目標と実行プランの全体進捗」を確認し、実行プランが全て✅なら目標達成と判断すること
 - 現在評価中の目標ステップ「{current_objective or goal}」が達成されているかを特に評価すること
 
 【★超重要★ スキップ不可の原則】
@@ -139,6 +193,23 @@ class MultiStageReplanner:
 - 例: ホームタブが初期選択されていても、ホームタブをタップしていなければ「ホームタブのタップ」は未達成
 - 理由: タップすることでUIに変化が発生する可能性があり、テストとして確認が必要
 - 唯一の例外: アプリ起動のみ（Appiumが自動実行するため）
+
+【★必須★ 「すべて」目標の要素カウント】
+- 「すべてのタブ/ボタン/項目をタップする」目標がある場合:
+  → 画面上に存在する対象要素の総数を必ずカウントして報告すること
+  → 例: 「タブメニューには7個のタブが存在: ホーム、映画、テレビ、アプリ、放送中の番組、お気に入り、最近の項目」
+  → このカウントがプラン生成時の参照情報となる
+
+【★超重要★ 「すべて」目標の達成判断ルール】
+- 「すべてのタブをタップする」「すべてのボタンを押す」等の目標の達成判断:
+  1. 「実行プランの全体像と進捗」を確認する
+  2. プラン内の対象操作（各タブのタップ等）が全て ✅（完了済み）かを確認
+  3. 全て完了済み → current_objective_achieved = True
+  4. ▶️（現在位置）や ⏳（未実行）の対象操作がある → current_objective_achieved = False
+  
+- ★重要★ 現在の画面状態ではなく、**プランの進捗状況**に基づいて判断すること
+  - プランで全タブのタップが✅なら、現在どのタブが選択されていても「達成」
+  - プランで「お気に入りタブをタップ」が⏳なら「未達成」
 
 【「確認する」目標の判定基準】（重要）
 - 「〇〇を確認する」「〇〇ダイアログを確認する」目標の場合:
@@ -151,7 +222,8 @@ class MultiStageReplanner:
 - アプリがクラッシュした（ホーム画面に戻った、「アプリが停止しました」ダイアログが表示など）
 - 予期しないエラーダイアログが表示された（「問題が発生しました」「エラー」など）
 - アプリがフリーズして操作できない
-- 同じ操作を**3回以上**繰り返しても画面が変化しない（スタック状態）→ is_stuck=True も設定
+- 同じ操作を**3回以上**繰り返しても画面が変化しない（スタック状態）
+  → app_defect_reason = "stuck: ..." の形式で記載すること
 - 画面が真っ白/真っ黒になった
 - 操作したボタンが反応しない（複数回試行後も）
 - 確認するべきダイアログやテキストや要素が表示されない（ブロッキング要素がなく、かつ目標ステップが未達成の場合）
@@ -181,6 +253,8 @@ class MultiStageReplanner:
     → ロケーター情報の selected="true" 属性や、タブ名のtext属性を確認すること
 
 アプリ不具合を検出した場合は、app_defect_reason に詳細を記載すること。
+**スタック状態の場合は「stuck: 詳細」の形式で記載すること。**
+例: app_defect_reason = "stuck: 同じ操作を3回繰り返しても画面が変化しない"
 
 【分析指示】
 1. 前ステップからの画面変化と差分（UI要素の追加/削除/変更）
@@ -192,8 +266,7 @@ class MultiStageReplanner:
 5. アプリの不具合が検出されたかどうか（★重要★）
 6. 現在の目標ステップが達成されているかどうか
 7. 現在の目標ステップの達成/未達成の根拠
-8. 全体の目標が達成されているかどうか
-9. 次に実行すべきアクションの提案（任意）
+8. 次に実行すべきアクションの提案（任意）
 
 【ブロッキング要素の判定基準】（★重要★）
 以下に該当する画面は「目標達成を妨げるダイアログやオーバーレイ」として報告すること:
@@ -236,16 +309,20 @@ class MultiStageReplanner:
         with self.token_callback.track_query():
             state_analysis: StateAnalysis = await structured_llm.ainvoke([HumanMessage(content=content_blocks)])
         
+        # 残りステップ数を計算してプラン有効性を判定
+        # ObjectiveProgressは必須なので、正確な残りステップ数を使用
+        plan_still_valid = state_analysis.is_plan_still_valid(remaining_steps)
+        
         print(Fore.MAGENTA + f"[MultiStageReplanner.analyze_state model: {self.model_name}] State analysis completed")
         print(Fore.CYAN + f"  - screen_type: {state_analysis.current_screen_type}")
         print(Fore.CYAN + f"  - current_objective_achieved: {state_analysis.current_objective_achieved}")
-        print(Fore.CYAN + f"  - goal_achieved: {state_analysis.goal_achieved}")
         print(Fore.CYAN + f"  - blocking_dialogs: {state_analysis.blocking_dialogs or 'None'}")
+        print(Fore.CYAN + f"  - plan_still_valid: {plan_still_valid} (derived)")
         print(Fore.CYAN + f"  - app_defect_detected: {state_analysis.app_defect_detected}")
         if state_analysis.app_defect_detected:
             print(Fore.RED + f"  - app_defect_reason: {state_analysis.app_defect_reason}")
-        if state_analysis.is_stuck:
-            print(Fore.RED + f"  - is_stuck: True")
+        if state_analysis.is_stuck():
+            print(Fore.RED + f"  - is_stuck: True (derived from app_defect_reason)")
         return state_analysis
 
     
@@ -255,39 +332,26 @@ class MultiStageReplanner:
         original_plan: list, 
         past_steps: list, 
         state_analysis: StateAnalysis,
-        objective_progress: Optional[ObjectiveProgress] = None
+        objective_progress: ObjectiveProgress
     ) -> tuple:
         """ステージ2: Plan/Responseどちらを返すべきか判断（構造化出力）
         
         Args:
             goal: テスト目標
-            original_plan: 元の計画
-            past_steps: 完了済みステップ
+            original_plan: 元の計画（参照用）
+            past_steps: 完了済みステップ（参照用）
             state_analysis: analyze_stateからの構造化された状態分析結果
-            objective_progress: 目標進捗管理オブジェクト（新規追加）
+            objective_progress: 目標進捗管理オブジェクト（必須）
         """
-        remaining_steps = max(len(original_plan) - len(past_steps), 0)
-
-        # 目標ステップの進捗情報を構築
-        objective_info = ""
-        all_objectives_completed = False
-        is_last_objective = False
-        if objective_progress:
-            all_objectives_completed = objective_progress.is_all_objectives_completed()
-            completed_count = objective_progress.get_completed_objectives_count()
-            total_count = objective_progress.get_total_objectives_count()
-            
-            # 現在の目標ステップが達成されたら全目標達成かどうかを判定
-            remaining_after_current = total_count - completed_count - (1 if state_analysis.current_objective_achieved else 0)
-            is_last_objective = remaining_after_current <= 0 and state_analysis.current_objective_achieved
-            
-            objective_info = f"""
-【ユーザー目標ステップの進捗】
-完了: {completed_count}/{total_count}
-全目標達成: {"Yes" if all_objectives_completed else "No"}
-現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
-現在の目標が最後の目標: {"Yes" if is_last_objective else "No"}
-"""
+        # ObjectiveProgressから進捗情報を取得
+        objective_and_plan_info = objective_progress.format_for_llm()
+        all_objectives_completed = objective_progress.is_all_objectives_completed()
+        completed_count = objective_progress.get_completed_objectives_count()
+        total_count = objective_progress.get_total_objectives_count()
+        
+        # 現在の目標ステップが達成されたら全目標達成かどうかを判定
+        remaining_after_current = total_count - completed_count - (1 if state_analysis.current_objective_achieved else 0)
+        is_last_objective = remaining_after_current <= 0 and state_analysis.current_objective_achieved
 
         # StateAnalysisから状態要約を構築
         state_summary = f"""
@@ -298,27 +362,24 @@ class MultiStageReplanner:
 テスト進捗: {state_analysis.test_progress}
 検出された問題: {state_analysis.problems_detected or "なし"}
 アプリ不具合検出: {"Yes - " + (state_analysis.app_defect_reason or "詳細不明") if state_analysis.app_defect_detected else "No"}
-スタック状態: {"Yes" if state_analysis.is_stuck else "No"}
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
 現在の目標ステップ根拠: {state_analysis.current_objective_evidence}
-全体の目標達成: {"Yes" if state_analysis.goal_achieved else "No"}
-達成判断理由: {state_analysis.goal_achievement_reason}
+全ての目標ステップ達成: {"Yes" if all_objectives_completed else "No"}
 """
 
         prompt = f"""あなたは次のアクションを厳密に判断するエキスパートです。
 
 【目標】
 {goal}
-{objective_info}
+
+{objective_and_plan_info}
 
 【状態分析結果】
 {state_summary}
 
-【LLM実行計画の進捗】（参考）
-計画ステップ総数: {len(original_plan)} / 完了: {len(past_steps)} / 残り: {remaining_steps}
-
 【判断基準（厳格）】
 ★重要★ 判断基準は「ユーザー目標ステップ」の達成度です。LLM実行計画の進捗ではありません。
+★重要★ 「実行プランの全体像と進捗」を確認し、全ステップが✅なら目標達成と判断すること。
 
 ★最優先★ ブロッキングダイアログの処理:
 0. ブロッキングダイアログがある → decision=PLAN（まず障害物を処理）
@@ -370,59 +431,186 @@ class MultiStageReplanner:
         original_plan: list,
         past_steps: list,
         state_analysis: StateAnalysis,
-        objective_progress: Optional[ObjectiveProgress] = None,
-        locator: str = ""
+        objective_progress: ObjectiveProgress,
+        locator: str
     ) -> Plan:
-        """ステージ3a: 次のPlanを作成
+        """ステージ3a: 次のPlanを作成（C案: ハイブリッド方式）
+        
+        残りステップはコード側で保護し、LLMにはブロッキングダイアログ処理のみを任せる。
         
         Args:
             goal: テスト目標
-            original_plan: 元の計画
-            past_steps: 完了済みステップ（(step, result)のタプルリスト）
+            original_plan: 元の計画（参照用）
+            past_steps: 完了済みステップ（参照用）
             state_analysis: analyze_stateからの構造化された状態分析結果
-            objective_progress: 目標進捗管理オブジェクト
-            locator: 画面のロケーター情報（ブロッキングダイアログ処理用）
+            objective_progress: 目標進捗管理オブジェクト（必須）
+            locator: 画面のロケーター情報
         """
-        remaining = original_plan[len(past_steps):]
-        total_steps = len(original_plan)
-        completed_steps = len(past_steps)
-        remaining_count = len(remaining)
+        # 進捗情報を取得
+        current_step = objective_progress.get_current_step()
+        if not current_step:
+            raise ValueError("No current step in ObjectiveProgress")
         
-        # 完了済みアクション履歴を構築（重要：何を既に実行したかをLLMに伝える）
-        completed_actions_info = ""
-        if past_steps:
-            completed_actions_list = []
-            for i, (step, result) in enumerate(past_steps):
-                # resultから成功/失敗を判定
-                result_str = str(result)[:100] if result else "結果なし"
-                completed_actions_list.append(f"  {i+1}. ✅ {step}")
-            completed_actions_info = f"""
-【★重要★ 既に完了したアクション】（これらは再実行しないこと）
-{chr(10).join(completed_actions_list)}
+        remaining = objective_progress.get_current_remaining_plan()
+        dialog_mode = objective_progress.is_handling_dialog()
+        dialog_count = objective_progress.get_dialog_handling_count()
+        total_steps = len(current_step.execution_plan)
+        remaining_count = len(remaining)
+        completed_steps = total_steps - remaining_count
+        
+        # ★ログ出力: ダイアログ処理モードと通常モードで分離
+        print(Fore.CYAN + "=" * 60)
+        if dialog_mode:
+            # ダイアログ処理モード用ログ
+            print(Fore.YELLOW + "[build_plan] 🔒 ダイアログ処理モード")
+            print(Fore.YELLOW + f"  ダイアログ処理ステップ完了数: {dialog_count}")
+            print(Fore.YELLOW + f"  ブロッキングダイアログ: {state_analysis.blocking_dialogs}")
+            print(Fore.YELLOW + f"  凍結中の通常計画: {total_steps}ステップ (完了: {completed_steps}, 残り: {remaining_count})")
+            print(Fore.YELLOW + f"  復帰先の目標: [{current_step.index}] {current_step.description[:60]}...")
+            # 停止位置を表示
+            if remaining:
+                print(Fore.YELLOW + f"  ⮩ 停止位置 (次に実行予定だったステップ):")
+                print(Fore.YELLOW + f"    [{completed_steps + 1}/{total_steps}] {remaining[0][:70]}...")
+        else:
+            # 通常モード用ログ
+            print(Fore.CYAN + "[build_plan] 📋 通常処理モード")
+            print(Fore.CYAN + f"  計画ステップ: {total_steps} (完了: {completed_steps}, 残り: {remaining_count})")
+            if remaining:
+                print(Fore.CYAN + f"  残りステップ (最初の3件):")
+                for step in remaining[:3]:
+                    print(Fore.CYAN + f"    - {step[:60]}...")
+            print(Fore.CYAN + f"  目標進捗: {objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()} 完了")
+            print(Fore.CYAN + f"  現在の目標: [{current_step.index}] {current_step.description[:60]}...")
+            print(Fore.CYAN + f"  StateAnalysis: achieved={state_analysis.current_objective_achieved}, blocking={bool(state_analysis.blocking_dialogs)}")
+        print(Fore.CYAN + "=" * 60)
+        
+        # ★★★ C案: ハイブリッド方式 ★★★
+        # 残りステップはコード側で保護し、LLMにはブロッキングダイアログ処理のみを任せる
+        
+        # ケース1: ブロッキングダイアログがなく、残りステップがある場合
+        # → LLMを呼ばずに残りステップをそのまま返す
+        if not state_analysis.blocking_dialogs and remaining_count > 0:
+            if dialog_mode:
+                # ダイアログ処理が完了し、通常処理に復帰
+                print(Fore.GREEN + f"[build_plan] 🔓 ダイアログ処理完了 → 通常処理に復帰")
+                print(Fore.GREEN + f"  凍結解除: 残り{remaining_count}ステップを再開")
+            else:
+                print(Fore.GREEN + f"[build_plan] 📋 通常継続: 残り{remaining_count}ステップ")
+            return Plan(steps=remaining)
+        
+        # ケース2: 残りステップがない場合
+        # → 目標達成済みまたは次の目標へ進む必要がある（新規プラン生成が必要）
+        if remaining_count == 0:
+            print(Fore.YELLOW + f"[build_plan] 📝 残りステップなし: 新規プラン生成")
+            return await self._generate_new_plan(
+                goal, state_analysis, objective_progress, locator
+            )
+        
+        # ケース3: ブロッキングダイアログがあり、残りステップもある場合
+        # → ダイアログ処理ステップのみをLLMに生成させる
+        # → 残りステップは execution_plan に凍結されているので結合不要
+        # → ダイアログ解消後、次のreplanで残りステップが返される
+        print(Fore.YELLOW + f"[build_plan] 🔒 ダイアログ処理: ステップ生成中")
+        print(Fore.YELLOW + f"  ブロッキング: {state_analysis.blocking_dialogs}")
+        print(Fore.YELLOW + f"  凍結中: {remaining_count}ステップ（ダイアログ解消後に再開）")
+        dialog_steps = await self._generate_dialog_handling_steps(
+            state_analysis, locator
+        )
+        print(Fore.YELLOW + f"[build_plan] 🔒 ダイアログ処理ステップ生成完了: {len(dialog_steps)}個")
+        return Plan(steps=dialog_steps)  # ダイアログ処理のみ（結合しない）
+    
+    def _create_state_analysis_for_dialog(self, screen_analysis) -> StateAnalysis:
+        """ScreenAnalysisからStateAnalysisを生成するヘルパー（plan_step用）
+        
+        plan_stepで初回のダイアログ検出時に使用。
+        ScreenAnalysisの情報をStateAnalysisに変換する。
+        
+        Args:
+            screen_analysis: simple_planner.ScreenAnalysis オブジェクト
+            
+        Returns:
+            StateAnalysis: ダイアログ処理用の状態分析結果
+        """
+        return StateAnalysis(
+            screen_changes="初回分析（前回画面なし）",
+            current_screen_type=screen_analysis.screen_type,
+            main_elements=screen_analysis.main_elements,
+            blocking_dialogs=screen_analysis.blocking_dialogs,
+            test_progress="初回計画作成中",
+            problems_detected=None,
+            app_defect_detected=False,
+            app_defect_reason=None,
+            current_objective_achieved=False,
+            current_objective_evidence="初回計画作成中のため未評価",
+            suggested_next_action=f"ダイアログを閉じる: {screen_analysis.blocking_dialogs}"
+        )
+    
+    async def _generate_dialog_handling_steps(
+        self,
+        state_analysis: StateAnalysis,
+        locator: str
+    ) -> list:
+        """ブロッキングダイアログを閉じるためのステップのみを生成（1〜2ステップ）"""
+        
+        prompt = f"""ブロッキングダイアログを閉じるためのステップを生成してください。
+
+【検出されたブロッキングダイアログ】
+{state_analysis.blocking_dialogs}
+
+【画面のロケーター情報】
+{locator if locator else "なし"}
+
+【タスク】
+上記のダイアログを閉じるためのステップを**1〜2個だけ**生成してください。
+
+【ルール】
+- 同意ボタン、OKボタン、閉じるボタンなど、ダイアログを閉じるボタンをタップするステップを生成
+- blocking_dialogsに記載されているresource-idがあれば、それを使用する
+- ロケーター情報から適切なボタン（"同意する"、"OK"、"閉じる"、"Accept"、"Got it"等）を見つけて使用する
+- ステップは具体的で実行可能なこと
+- **ダイアログを閉じる操作のみ**を生成すること（その後の操作は含めない）
+
+【出力形式】
+steps: ダイアログを閉じるためのステップ（1〜2個のリスト）
 """
         
-        # 目標ステップ情報を構築
-        objective_info = ""
+        messages = [HumanMessage(content=prompt)]
+        structured_llm = self.llm.with_structured_output(Plan)
+        
+        try:
+            if self.token_callback:
+                with self.token_callback.track_query():
+                    plan = await structured_llm.ainvoke(messages)
+            else:
+                plan = await structured_llm.ainvoke(messages)
+            
+            print(Fore.MAGENTA + f"[_generate_dialog_handling_steps] 生成: {len(plan.steps)}ステップ")
+            return plan.steps
+        except Exception as e:
+            print(Fore.RED + f"[_generate_dialog_handling_steps] エラー: {e}")
+            # フォールバック: blocking_dialogsに記載されたresource-idを使ってタップ
+            if state_analysis.blocking_dialogs:
+                fallback_step = f"resource-id '{state_analysis.blocking_dialogs}' をタップしてダイアログを閉じる"
+                return [fallback_step]
+            return []
+    
+    async def _generate_new_plan(
+        self,
+        goal: str,
+        state_analysis: StateAnalysis,
+        objective_progress: Optional[ObjectiveProgress] = None,
+        locator: str = ""
+    ) -> Plan:
+        """新規プランを生成（残りステップがない場合のみ呼ばれる）"""
+        
+        # ObjectiveProgressから進捗情報を取得
+        objective_and_plan_info = ""
         current_objective = ""
-        remaining_objectives = []
         if objective_progress:
+            objective_and_plan_info = objective_progress.format_for_llm()
             current_step = objective_progress.get_current_step()
             if current_step:
                 current_objective = current_step.description
-            
-            # 未完了の目標ステップ一覧
-            for step in objective_progress.objective_steps:
-                if step.status not in ("completed", "skipped"):
-                    remaining_objectives.append(f"  - [{step.index}] {step.description}")
-            
-            objective_info = f"""
-【★重要★ ユーザー目標ステップ】（これが達成基準）
-残り目標ステップ数: {len(remaining_objectives)}
-{chr(10).join(remaining_objectives) if remaining_objectives else "(全目標達成済み)"}
-
-【現在取り組むべき目標】
-{current_objective or "(全目標達成済み)"}
-"""
         
         # StateAnalysisから状態要約を構築
         state_summary = f"""
@@ -430,98 +618,50 @@ class MultiStageReplanner:
 画面変化: {state_analysis.screen_changes}
 主要要素: {state_analysis.main_elements}
 ブロッキングダイアログ: {state_analysis.blocking_dialogs or "なし"}
-テスト進捗: {state_analysis.test_progress}
-検出された問題: {state_analysis.problems_detected or "なし"}
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
-達成判断理由: {state_analysis.goal_achievement_reason}
+達成判断理由: {state_analysis.current_objective_evidence}
 次のアクション提案: {state_analysis.suggested_next_action or "なし"}
 """
         
-        # ロケーター情報セクション（ブロッキングダイアログ処理用）
+        # ロケーター情報セクション
         locator_section = ""
-        if locator and state_analysis.blocking_dialogs:
+        if locator:
             locator_section = f"""
-【★重要★ 現在の画面ロケーター情報】
-ブロッキングダイアログを閉じるために、以下のロケーター情報から適切なボタン（同意、OK、閉じる等）を見つけてください:
+【現在の画面ロケーター情報】
 {locator}
 """
         
-        prompt = f"""
-あなたは実行計画を作成するエキスパートです。
+        prompt = f"""あなたは実行計画を作成するエキスパートです。
 
 【全体の目標】
 {goal}
-{objective_info}
-{completed_actions_info}
+
+{objective_and_plan_info}
+
 【現在の状態分析結果】
 {state_summary}
 {locator_section}
-【LLM実行計画の進捗】（参考情報）
-計画総ステップ数: {total_steps}
-完了済みステップ数: {completed_steps}
-残りステップ数: {remaining_count}
-
-残りの候補ステップ:
-{remaining}
-
-【ノウハウ】
-{self.knowhow}
-
-【★最重要ルール★】
-1. 生成するステップは**ユーザー目標ステップを達成するため**のものであること
-2. 現在取り組むべき目標「{current_objective or goal}」を達成するための最小限のステップを生成すること
-3. 目標ステップの数を超える過剰なステップを生成しないこと
-4. 現在の目標が達成済みなら、次の目標に進むステップのみを生成すること
-5. **「すべて」「順番に」などの繰り返し目標の場合**: 既に完了したアクションをスキップせず、**まだ実行していない残りの要素すべて**に対してステップを生成すること
-6. **★超重要★ スキップ禁止ルール**: 初期状態で既に選択済み/表示済みの要素であっても、目標に含まれている場合は必ずタップ/操作を実行すること
-   - 例: 「すべてのタブをタップする」目標で、ホームタブが初期選択されていても、ホームタブを必ずタップする
-   - 理由: タップすることでUIに何らかの変化（再読み込み、アニメーション等）が発生する可能性があるため
-   - 唯一の例外: アプリ起動はAppiumのcapabilitiesで自動実行されるためスキップ可
 
 【タスク】
-現在の目標ステップを達成するために必要な最適なステップ列を作成してください：
+現在の目標ステップ「{current_objective or goal}」を達成するために必要なステップを生成してください。
 
-★最優先★ ブロッキング画面の処理:
-- ブロッキングダイアログが検出されている場合:
-  → 状態分析結果のblocking_dialogsに記載されているresource-idを使って閉じるステップを生成する
-  → 例: 「resource-id 'com.example:id/agree_button' をタップして利用規約に同意する」
-  → ロケーター情報が提供されている場合は、そこから適切なボタン（同意、OK、閉じる等）を見つけて使用する
-- 初期設定画面、プライバシー画面、オンボーディング画面が表示されている場合:
-  → まずこれを完了させるステップを生成する
-  → 「More」「Next」「Accept」「OK」「Got it」「同意する」などのボタンを押して先に進む
-  → 目標の操作対象（例：メニューアイコン）が表示される画面に到達するまで進める
+【ルール】
+1. 目標達成に必要な**最小限のステップ**のみを生成すること
+2. 各ステップは**1つのツール呼び出し**に対応すること
+3. 「すべて」「順番に」などの繰り返し目標の場合、**すべての対象要素**に対してステップを生成すること
+4. 各ステップは具体的で実行可能なこと（resource-id、テキスト、xpathなどを含む）
 
-- 現在の画面状態を考慮して最適なステップを構築
-- 不要なステップは追加しない（目標達成に直接関係するもののみ）
-- 各ステップは具体的で実行可能なこと
-
-【重要】1ステップ=1ツール呼び出しの原則:
-各ステップは**1つのツール呼び出し**に対応すること。複数の操作を1ステップにまとめないこと。
-
-◆ ステップの分割例:
-- ❌「検索ボックスをタップし、'キーワード'を入力して検索ボタンを押す」
-- ✅「検索ボックスをタップする」→「'キーワード'を入力する」→「検索ボタンを押す」
-
-◆ 1ステップの単位:
+【1ステップ=1操作の原則】
 - タップ操作: 1要素のタップ = 1ステップ
-- テキスト入力: 1フィールドへの入力 = 1ステップ（send_keysで文字列全体を入力）
+- テキスト入力: send_keysで文字列全体を入力 = 1ステップ
 - スクロール: 1回のスクロール = 1ステップ
-- 確認: 1つの要素/状態の確認 = 1ステップ
 
-【テキスト入力のルール】（厳守）:
-- テキスト入力には必ず send_keys を使用すること
-- press_keycode で1文字ずつ入力してはいけない（効率が悪く、キーコード変換エラーが起きやすい）
-- press_keycode は Enter キー（keycode 66）や Back キー（keycode 4）などの特殊キーにのみ使用すること
-- 正しい例: 「URLバーに 'yahoo.co.jp' を入力する」→「Enter キーを押して確定する」
-- 誤った例: 「キーコードを使って1文字ずつ入力する」（禁止）
+【禁止事項】
+- アカウント作成
+- 自動ログイン
+- 目標と関係ない操作
 
-【厳格ルール】
-- アカウント作成は禁止
-- 自動ログインは禁止
-- 目標ステップと関係ない操作は禁止
-
-出力形式（JSON）:
-厳密なJSON形式
+出力形式: 厳密なJSON形式
 """
         
         messages = [HumanMessage(content=prompt)]
@@ -533,7 +673,7 @@ class MultiStageReplanner:
         else:
             plan = await structured_llm.ainvoke(messages)
         
-        print(Fore.MAGENTA + f"[MultiStageReplanner.build_plan model: {self.model_name}] Plan created with {len(plan.steps)} steps")
+        print(Fore.MAGENTA + f"[_generate_new_plan] 新規プラン生成完了: {len(plan.steps)}ステップ")
         return plan
     
     async def build_response(
@@ -541,7 +681,7 @@ class MultiStageReplanner:
         goal: str, 
         past_steps: list, 
         state_analysis: StateAnalysis,
-        objective_progress: Optional[ObjectiveProgress] = None
+        objective_progress: ObjectiveProgress
     ) -> Response:
         """ステージ3b: 完了Responseを作成
         
@@ -549,7 +689,7 @@ class MultiStageReplanner:
             goal: テスト目標
             past_steps: 完了済みステップ
             state_analysis: analyze_stateからの構造化された状態分析結果
-            objective_progress: 目標進捗管理オブジェクト（新規追加）
+            objective_progress: 目標進捗管理オブジェクト（必須）
         """
         completed_count = len(past_steps)
         
@@ -558,20 +698,9 @@ class MultiStageReplanner:
             f"{i+1}. {step[0]}" for i, step in enumerate(past_steps)
         ) if past_steps else "(なし)"
         
-        # 目標ステップの進捗情報
-        objective_summary = ""
-        if objective_progress:
-            objective_list = []
-            for step in objective_progress.objective_steps:
-                status_icon = "✅" if step.status == "completed" else "❌" if step.status == "failed" else "⏳"
-                objective_list.append(f"  {status_icon} {step.description}")
-            
-            objective_summary = f"""
-【ユーザー目標ステップの達成状況】
-{chr(10).join(objective_list)}
-
-完了: {objective_progress.get_completed_objectives_count()}/{objective_progress.get_total_objectives_count()}
-"""
+        # ObjectiveProgressから進捗情報を取得
+        objective_and_plan_info = objective_progress.format_for_llm()
+        all_objectives_completed = objective_progress.is_all_objectives_completed()
         
         # StateAnalysisから状態要約を構築
         state_summary = f"""
@@ -580,8 +709,8 @@ class MultiStageReplanner:
 主要要素: {state_analysis.main_elements}
 テスト進捗: {state_analysis.test_progress}
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
-全体の目標達成: {"Yes" if state_analysis.goal_achieved else "No"}
-達成判断理由: {state_analysis.goal_achievement_reason}
+全ての目標ステップ達成: {"Yes" if all_objectives_completed else "No"}
+達成判断理由: {state_analysis.current_objective_evidence}
 """
         
         # アプリ不具合情報を追加
@@ -590,7 +719,6 @@ class MultiStageReplanner:
             defect_info = f"""
 【★アプリ不具合検出★】
 不具合が検出されました: {state_analysis.app_defect_reason or "詳細不明"}
-スタック状態: {"Yes" if state_analysis.is_stuck else "No"}
 検出された問題: {state_analysis.problems_detected or "なし"}
 """
         
@@ -598,7 +726,9 @@ class MultiStageReplanner:
 
 【目標】
 {goal}
-{objective_summary}
+
+{objective_and_plan_info}
+
 {defect_info}
 
 【現在の状態分析結果】

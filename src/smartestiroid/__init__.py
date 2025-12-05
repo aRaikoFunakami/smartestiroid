@@ -36,6 +36,9 @@ from .models import (
     Plan,
     Response,
     Act,
+)
+
+from .progress import (
     ObjectiveStep,
     ObjectiveProgress,
     ObjectiveStepResult,

@@ -4,7 +4,7 @@
 """
 
 import pytest
-from smartestiroid.models import (
+from smartestiroid.progress import (
     ObjectiveStep,
     ObjectiveProgress,
     ObjectiveStepResult,

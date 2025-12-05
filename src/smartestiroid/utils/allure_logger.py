@@ -12,7 +12,7 @@ from colorama import Fore
 from langchain_core.callbacks import BaseCallbackHandler
 
 from ..config import OPENAI_TIMEOUT
-from ..models import ToolCallRecord, StepExecutionRecord, ExecutionProgress, ObjectiveProgress
+from ..progress import ToolCallRecord, StepExecutionRecord, ExecutionProgress, ObjectiveProgress
 
 
 class AllureToolCallbackHandler(BaseCallbackHandler):
@@ -85,6 +85,42 @@ class AllureToolCallbackHandler(BaseCallbackHandler):
             lines.append(f"【ツール呼び出し】 合計{tool_calls}回")
         
         return "\n".join(lines) if lines else "進捗情報なし"
+    
+    def get_last_tool_name(self) -> Optional[str]:
+        """最後に呼び出されたツール名を取得
+        
+        Returns:
+            最後のツール名、なければNone
+        """
+        if self.tool_calls:
+            return self.tool_calls[-1].get("tool_name")
+        return None
+    
+    def get_summary(self) -> str:
+        """ツール呼び出し履歴の要約を取得
+        
+        Returns:
+            ツール呼び出しの要約文字列（評価用）
+        """
+        if not self.tool_calls:
+            return "ツール呼び出しなし"
+        
+        lines = []
+        for i, call in enumerate(self.tool_calls, 1):
+            tool_name = call.get("tool_name", "Unknown")
+            input_str = call.get("input", "")[:200]  # 入力は200文字まで
+            output_str = str(call.get("output", ""))[:300] if call.get("output") else "None"
+            error = call.get("error")
+            
+            status = "❌ ERROR" if error else "✅ OK"
+            lines.append(f"{i}. {tool_name}: {status}")
+            lines.append(f"   Input: {input_str}")
+            if error:
+                lines.append(f"   Error: {error[:200]}")
+            else:
+                lines.append(f"   Output: {output_str}")
+        
+        return "\n".join(lines)
     
     def on_tool_start(self, serialized: Dict[str, Any], input_str: str, **kwargs) -> None:
         """ツール呼び出し開始時"""

@@ -11,10 +11,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 import allure
 
-from ..models import (
-    PlanExecute, Plan, Response, Act,
-    ObjectiveStep, ObjectiveProgress, ObjectiveStepResult, ParsedObjectiveSteps
-)
+from ..models import PlanExecute, Plan, Response, Act
+from ..progress import ObjectiveStep, ObjectiveProgress, ObjectiveStepResult, ParsedObjectiveSteps
 from ..config import (
     OPENAI_TIMEOUT, OPENAI_MAX_RETRIES,
     MODEL_STANDARD, KNOWHOW_INFO, RESULT_PASS
@@ -443,10 +441,10 @@ class SimplePlanner:
     async def replan(
         self,
         state: PlanExecute,
-        locator: str = "",
-        image_url: str = "",
-        previous_image_url: str = "",
-        objective_progress: Optional[ObjectiveProgress] = None,
+        locator: str,
+        image_url: str,
+        previous_image_url: str,
+        objective_progress: ObjectiveProgress,
     ) -> Act:
         """実行結果を評価して計画を再調整する
         
@@ -455,7 +453,7 @@ class SimplePlanner:
             locator: 画面のロケーター情報
             image_url: 現在のスクリーンショット
             previous_image_url: 前回のスクリーンショット
-            objective_progress: 目標進捗管理オブジェクト（新規追加）
+            objective_progress: 目標進捗管理オブジェクト（必須）
         """
         # Multi-stage replan処理
         try:
@@ -469,20 +467,57 @@ class SimplePlanner:
                 current_image_url=image_url,
                 objective_progress=objective_progress
             )
+            
+            # ★ ダイアログ処理モードの切り替え ★
+            if state_analysis.blocking_dialogs:
+                # ブロッキングダイアログあり → モードに入る（冪等）
+                if not objective_progress.is_handling_dialog():
+                    objective_progress.enter_dialog_handling_mode()
+                    current_step = objective_progress.get_current_step()
+                    remaining = objective_progress.get_current_remaining_plan()
+                    print(Fore.YELLOW + "=" * 60)
+                    print(Fore.YELLOW + "🔒 [replan] ダイアログ処理モード開始")
+                    print(Fore.YELLOW + f"   検出: {state_analysis.blocking_dialogs}")
+                    print(Fore.YELLOW + f"   凍結する通常計画: {len(remaining)}ステップ残り")
+                    print(Fore.YELLOW + f"   復帰先の目標: [{current_step.index}] {current_step.description[:50]}...")
+                    if remaining:
+                        print(Fore.YELLOW + f"   ⮩ 停止位置: [{current_step.execution_plan_index + 1}/{len(current_step.execution_plan)}] {remaining[0][:60]}...")
+                    print(Fore.YELLOW + "=" * 60)
+            else:
+                # ブロッキングダイアログなし → モードから抜ける
+                if objective_progress.is_handling_dialog():
+                    dialog_count = objective_progress.get_dialog_handling_count()
+                    objective_progress.exit_dialog_handling_mode()
+                    remaining = objective_progress.get_current_remaining_plan()
+                    current_step = objective_progress.get_current_step()
+                    print(Fore.GREEN + "=" * 60)
+                    print(Fore.GREEN + "🔓 [replan] ダイアログ処理モード終了 → 通常処理に復帰")
+                    print(Fore.GREEN + f"   ダイアログ処理で実行したステップ数: {dialog_count}")
+                    print(Fore.GREEN + f"   凍結解除: 残り{len(remaining)}ステップから再開")
+                    if remaining:
+                        print(Fore.GREEN + f"   ⮩ 再開位置: [{current_step.execution_plan_index + 1}/{len(current_step.execution_plan)}] {remaining[0][:60]}...")
+                    print(Fore.GREEN + "=" * 60)
+            
+            # 全目標達成判定
+            all_objectives_completed = objective_progress.is_all_objectives_completed()
+            
             # 構造化された状態分析結果をログ出力
+            if objective_progress.is_handling_dialog():
+                dialog_count = objective_progress.get_dialog_handling_count()
+                dialog_mode_info = f"\n処理モード: 🔒 ダイアログ処理中 (累計{dialog_count}ステップ)"
+            else:
+                dialog_mode_info = f"\n処理モード: 📋 通常処理"
             state_summary = f"""
 画面タイプ: {state_analysis.current_screen_type}
 画面変化: {state_analysis.screen_changes}
 主要要素: {state_analysis.main_elements}
-ブロッキングダイアログ: {state_analysis.blocking_dialogs or "なし"}
+ブロッキングダイアログ: {state_analysis.blocking_dialogs or "なし"}{dialog_mode_info}
 テスト進捗: {state_analysis.test_progress}
 検出された問題: {state_analysis.problems_detected or "なし"}
 アプリ不具合検出: {"Yes - " + (state_analysis.app_defect_reason or "詳細不明") if state_analysis.app_defect_detected else "No"}
-スタック状態: {"Yes" if state_analysis.is_stuck else "No"}
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
 現在の目標ステップ根拠: {state_analysis.current_objective_evidence}
-全体の目標達成: {"Yes" if state_analysis.goal_achieved else "No"}
-達成判断理由: {state_analysis.goal_achievement_reason}
+全ての目標ステップ達成: {"Yes" if all_objectives_completed else "No"}
 次のアクション提案: {state_analysis.suggested_next_action or "なし"}
 """
             print(Fore.CYAN + f"状態分析結果:\n{state_summary}")
@@ -502,13 +537,12 @@ class SimplePlanner:
             print(Fore.CYAN + "🔀 Multi-stage replan: STAGE 3（Output Generation）")
             if decision == "RESPONSE":
                 # RESPONSE判定 = テスト終了（成功または失敗）
-                # ここで初めて目標達成を確定させる
                 print(Fore.CYAN + "  → RESPONSE分岐に入りました。build_response()を呼び出します...")
                 
                 # 目標進捗を更新（RESPONSEが返される = 現在の目標が達成または終了）
-                if state_analysis.current_objective_achieved and objective_progress:
+                if state_analysis.current_objective_achieved:
                     current_step = objective_progress.get_current_step()
-                    if current_step and current_step.status != "completed":
+                    if current_step.status != "completed":
                         evidence = state_analysis.current_objective_evidence or "状態分析により達成確認"
                         print(Fore.GREEN + f"✅ [Planner] 目標ステップ完了: [{current_step.index}] {current_step.description[:50]}...")
                         objective_progress.mark_current_completed(evidence=evidence)
@@ -539,9 +573,9 @@ class SimplePlanner:
             else:
                 # PLAN判定 = まだ継続が必要
                 # 現在の目標ステップが達成されている場合は次の目標に進む
-                if state_analysis.current_objective_achieved and objective_progress:
+                if state_analysis.current_objective_achieved:
                     current_step = objective_progress.get_current_step()
-                    if current_step and current_step.status != "completed":
+                    if current_step.status != "completed":
                         evidence = state_analysis.current_objective_evidence or "状態分析により達成確認"
                         print(Fore.GREEN + f"✅ [Planner] 目標ステップ完了: [{current_step.index}] {current_step.description[:50]}...")
                         objective_progress.mark_current_completed(evidence=evidence)
@@ -551,8 +585,6 @@ class SimplePlanner:
                         if has_next:
                             next_objective = objective_progress.get_current_step()
                             print(Fore.CYAN + f"🎯 [Planner] 次の目標ステップに進みます: [{next_objective.index}] {next_objective.description[:50]}...")
-                        # has_next=False の場合でも、decide_action() が PLAN を返したので計画を作成する
-                        # （LLM の判断を尊重）
                 
                 # 現在の目標（または次の目標）に対する計画を作成
                 plan = await self.replanner.build_plan(
