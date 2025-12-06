@@ -403,6 +403,7 @@ def pytest_sessionfinish(session, exitstatus):
 def _generate_log_analysis():
     """テスト終了時にログ解析ファイルを自動生成"""
     from .utils.log_analyzer import LogAnalyzer
+    from .utils.failure_report_generator import FailureReportGenerator
     
     log_file = SLog.get_log_file()
     if log_file and log_file.exists():
@@ -427,6 +428,29 @@ def _generate_log_analysis():
                 LogEvent.FAIL,
                 {"error": str(e)},
                 f"ログ解析ファイルの生成に失敗: {e}"
+            )
+        
+        # 失敗レポートを生成
+        try:
+            log_dir = log_file.parent
+            generator = FailureReportGenerator(
+                log_dir=log_dir,
+                use_llm=True,  # LLM分析を使用
+                model_name="gpt-4.1-mini"
+            )
+            report_path = generator.generate_report()
+            SLog.info(
+                LogCategory.SESSION,
+                LogEvent.COMPLETE,
+                {"report_file": str(report_path)},
+                f"失敗レポートを生成しました: {report_path.name}"
+            )
+        except Exception as e:
+            SLog.warn(
+                LogCategory.SESSION,
+                LogEvent.FAIL,
+                {"error": str(e)},
+                f"失敗レポートの生成に失敗: {e}"
             )
 
 

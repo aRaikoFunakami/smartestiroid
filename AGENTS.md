@@ -95,7 +95,8 @@ tests/
 ├── test_appium_tools_app.py              # アプリ管理テスト
 ├── test_appium_tools_device.py           # デバイス状態テスト
 ├── test_appium_tools_token_counter.py    # トークンカウンターテスト（Android不要）
-└── test_xml_compressor.py                # XML圧縮テスト（Android不要）
+├── test_xml_compressor.py                # XML圧縮テスト（Android不要）
+└── test_failure_report_generator.py      # 失敗レポート生成テスト（Android不要）
 ```
 
 ### テスト実行
@@ -127,6 +128,9 @@ uv run pytest tests/test_appium_tools_token_counter.py
 
 # XML圧縮テスト（Android不要）
 uv run pytest tests/test_xml_compressor.py
+
+# 失敗レポート生成テスト（Android不要）
+uv run pytest tests/test_failure_report_generator.py
 
 # 特定のテストを実行
 uv run pytest tests/test_appium_tools_session.py -k "test_take_screenshot"
@@ -172,6 +176,7 @@ uv run pytest src/smartestiroid/test_android_app.py -k "TEST_0001" --mini-model
 | デバイス状態 | `test_appium_tools_device.py` |
 | トークンカウンター | `test_appium_tools_token_counter.py` |
 | XML圧縮 | `test_xml_compressor.py` |
+| 失敗レポート生成 | `test_failure_report_generator.py` |
 
 ```python
 @pytest.mark.asyncio
@@ -297,6 +302,40 @@ SLog.error({"error": str(e)}, "エラーメッセージ")
 
 # ❌ 間違い - dataをcategory位置に渡している
 SLog.warn({"key": "value"}, "警告メッセージ")
+```
+
+---
+
+## 📊 ログとレポート
+
+### ログフォルダ構造
+
+pytestを実行すると、ログは `smartestiroid_logs/run_YYYYMMDD_HHMMSS/` フォルダに保存されます。
+1回のpytestコマンド実行ごとに1つのフォルダが作成されます。
+
+```
+smartestiroid_logs/
+├── run_20251205_194626/
+│   ├── smartestiroid_session_20251205_194626.jsonl   # 構造化ログ
+│   ├── smartestiroid_session_20251205_194626_analysis.txt  # 解析用テキスト
+│   ├── smartestiroid_session_20251205_194626_images/  # スクリーンショット
+│   ├── smartestiroid_session_20251205_194626_prompts/ # LLMプロンプト
+│   └── failure_report.md                             # 失敗レポート（自動生成）
+└── run_20251206_100000/
+    └── ...
+```
+
+### 失敗レポート生成
+
+テスト終了時に自動で `failure_report.md` が生成されます。
+LLMを使って失敗原因を分析し、対処法をリコメンデーションします。
+
+```bash
+# 手動でレポートを再生成
+uv run python -m smartestiroid.utils.failure_report_generator smartestiroid_logs/run_YYYYMMDD_HHMMSS
+
+# LLMを使わずにレポート生成
+uv run python -m smartestiroid.utils.failure_report_generator smartestiroid_logs/run_YYYYMMDD_HHMMSS --no-llm
 ```
 
 ---

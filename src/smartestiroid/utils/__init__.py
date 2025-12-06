@@ -10,6 +10,11 @@ from .allure_logger import (
 from .device_info import write_device_info_once
 from .structured_logger import StructuredLogger, SLog, LogCategory, LogEvent
 from .log_analyzer import LogAnalyzer, LogEntry, AnalysisResult
+from .failure_report_generator import (
+    FailureReportGenerator,
+    FailureAnalysis,
+    FailedTestInfo,
+)
 
 __all__ = [
     'AllureToolCallbackHandler',
@@ -23,4 +28,7 @@ __all__ = [
     'LogAnalyzer',
     'LogEntry',
     'AnalysisResult',
+    'FailureReportGenerator',
+    'FailureAnalysis',
+    'FailedTestInfo',
 ]
