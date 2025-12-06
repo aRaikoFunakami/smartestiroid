@@ -2,12 +2,14 @@
 failure_report_generator のユニットテスト
 
 Androidデバイス不要のテストです。
+LLMはモックして、実際のAPI呼び出しは行いません。
 """
 
 import pytest
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from smartestiroid.utils.failure_report_generator import (
     FailureReportGenerator,
@@ -122,10 +124,7 @@ class TestFailureReportGenerator:
         """JSONLログの読み込み"""
         write_jsonl(temp_log_dir, SAMPLE_FAILED_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         assert len(generator.entries) == len(SAMPLE_FAILED_TEST_JSONL)
     
@@ -133,10 +132,7 @@ class TestFailureReportGenerator:
         """失敗テストの抽出"""
         write_jsonl(temp_log_dir, SAMPLE_FAILED_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         assert len(generator.failed_tests) == 1
         
@@ -151,10 +147,7 @@ class TestFailureReportGenerator:
         """失敗テストがない場合"""
         write_jsonl(temp_log_dir, SAMPLE_SUCCESS_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         assert len(generator.failed_tests) == 0
     
@@ -162,25 +155,21 @@ class TestFailureReportGenerator:
         """Appiumエラーの検出"""
         write_jsonl(temp_log_dir, SAMPLE_APPIUM_ERROR_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         assert len(generator.failed_tests) == 1
         
         failed = generator.failed_tests[0]
         assert failed.test_id == "TEST_0003"
-        assert failed.error_type == "InvalidContextError"
+        assert failed.error_type == "AppiumConnectionError"
     
-    def test_generate_report_no_failures(self, temp_log_dir):
+    @patch.object(FailureReportGenerator, '_analyze_with_llm', return_value=None)
+    @patch.object(FailureReportGenerator, '_analyze_failure_trends', return_value=None)
+    def test_generate_report_no_failures(self, mock_trends, mock_llm, temp_log_dir):
         """失敗がない場合のレポート生成"""
         write_jsonl(temp_log_dir, SAMPLE_SUCCESS_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         report_path = generator.generate_report()
         
@@ -188,14 +177,13 @@ class TestFailureReportGenerator:
         content = report_path.read_text()
         assert "すべてのテストが成功しました" in content
     
-    def test_generate_report_with_failures(self, temp_log_dir):
-        """失敗がある場合のレポート生成（LLMなし）"""
+    @patch.object(FailureReportGenerator, '_analyze_with_llm', return_value=None)
+    @patch.object(FailureReportGenerator, '_analyze_failure_trends', return_value=None)
+    def test_generate_report_with_failures(self, mock_trends, mock_llm, temp_log_dir):
+        """失敗がある場合のレポート生成（LLMはモック）"""
         write_jsonl(temp_log_dir, SAMPLE_FAILED_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         report_path = generator.generate_report()
         
@@ -206,8 +194,12 @@ class TestFailureReportGenerator:
         
         # ヘッダーとサマリー
         assert "# テスト失敗レポート" in content
-        assert "## サマリー" in content
-        assert "失敗テスト数" in content
+        assert "## テスト結果サマリー" in content
+        assert "テスト総数" in content
+        assert "成功率" in content
+        
+        # カテゴリ別サマリー
+        assert "## 失敗カテゴリ別サマリー" in content
         
         # テスト詳細
         assert "TEST_0001" in content
@@ -216,14 +208,13 @@ class TestFailureReportGenerator:
         assert "原因詳細" in content
         assert "推奨対応" in content
     
-    def test_fallback_analysis_element_not_found(self, temp_log_dir):
+    @patch.object(FailureReportGenerator, '_analyze_with_llm', return_value=None)
+    @patch.object(FailureReportGenerator, '_analyze_failure_trends', return_value=None)
+    def test_fallback_analysis_element_not_found(self, mock_trends, mock_llm, temp_log_dir):
         """フォールバック分析 - 要素が見つからない"""
         write_jsonl(temp_log_dir, SAMPLE_FAILED_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         # レポート生成（分析が実行される）
         generator.generate_report()
@@ -232,14 +223,13 @@ class TestFailureReportGenerator:
         assert failed.analysis is not None
         assert failed.analysis.failure_category == "ELEMENT_NOT_FOUND"
     
-    def test_fallback_analysis_appium_error(self, temp_log_dir):
+    @patch.object(FailureReportGenerator, '_analyze_with_llm', return_value=None)
+    @patch.object(FailureReportGenerator, '_analyze_failure_trends', return_value=None)
+    def test_fallback_analysis_appium_error(self, mock_trends, mock_llm, temp_log_dir):
         """フォールバック分析 - Appiumエラー"""
         write_jsonl(temp_log_dir, SAMPLE_APPIUM_ERROR_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         generator.generate_report()
         
@@ -251,10 +241,7 @@ class TestFailureReportGenerator:
         """スクリーンショットの追跡"""
         write_jsonl(temp_log_dir, SAMPLE_FAILED_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         failed = generator.failed_tests[0]
         assert len(failed.screenshots) == 1
@@ -264,10 +251,7 @@ class TestFailureReportGenerator:
         """完了ステップの追跡"""
         write_jsonl(temp_log_dir, SAMPLE_FAILED_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         failed = generator.failed_tests[0]
         assert len(failed.completed_steps) == 1
@@ -277,10 +261,7 @@ class TestFailureReportGenerator:
         """検証フェーズの追跡"""
         write_jsonl(temp_log_dir, SAMPLE_FAILED_TEST_JSONL)
         
-        generator = FailureReportGenerator(
-            log_dir=temp_log_dir,
-            use_llm=False
-        )
+        generator = FailureReportGenerator(log_dir=temp_log_dir)
         
         failed = generator.failed_tests[0]
         assert failed.verification_phase1 is not None
@@ -289,10 +270,7 @@ class TestFailureReportGenerator:
     def test_no_jsonl_file_error(self, temp_log_dir):
         """JSONLファイルがない場合のエラー"""
         with pytest.raises(FileNotFoundError):
-            FailureReportGenerator(
-                log_dir=temp_log_dir,
-                use_llm=False
-            )
+            FailureReportGenerator(log_dir=temp_log_dir)
 
 
 class TestCategoryDisplay:

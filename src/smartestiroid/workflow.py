@@ -41,8 +41,8 @@ async def analyze_test_failure(
 ) -> str:
     """テスト失敗時に原因分析を行う
     
-    注意: この関数はテスト失敗時のみ呼び出すこと。
-    リプラン回数制限到達時は、この関数を呼び出さずにシンプルなメッセージを返す。
+    FailureReportGeneratorと同じ方式で、FailedTestInfoを構築し、
+    同一のプロンプト形式でLLM分析を行う。
     
     Args:
         state: 現在のワークフロー状態
@@ -51,104 +51,167 @@ async def analyze_test_failure(
         failure_type: 失敗の種類（FailureType Enum）
         
     Returns:
-        LLMによる原因分析結果
+        plaintext形式の原因分析結果
     """
     from langchain_openai import ChatOpenAI
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import HumanMessage
     from .config import OPENAI_TIMEOUT, OPENAI_MAX_RETRIES
+    from .utils.failure_report_generator import FailureAnalysis, FailedTestInfo
+    
+    # step_historyからFailedTestInfoを構築（FailureReportGeneratorと同じ構造）
+    test_info = FailedTestInfo(
+        test_id=state.get("test_id", "UNKNOWN"),
+        title=state.get("input", "")[:100] if state.get("input") else "",
+        steps=state.get("input", ""),
+        expected=state.get("expected", "テストが成功すること"),
+    )
+    
+    # 完了ステップと失敗ステップを抽出
+    for step_info in step_history:
+        if step_info.get("success", False):
+            test_info.completed_steps.append(step_info.get("step", ""))
+        else:
+            # 最後の失敗ステップを記録
+            test_info.failed_step = step_info.get("step", "")
+            test_info.error_message = step_info.get("response", "")
+            
+            # 評価結果からエラー情報を抽出
+            evaluation = step_info.get("evaluation", {})
+            if evaluation:
+                executor_reason = evaluation.get("executor_reason", "")
+                if "not found" in executor_reason.lower():
+                    test_info.error_type = "NoSuchElementError"
+                elif "timeout" in executor_reason.lower():
+                    test_info.error_type = "TimeoutError"
+                else:
+                    test_info.error_type = "UnknownError"
+                
+                # Phase1/Phase2の検証結果を保存
+                test_info.verification_phase1 = {
+                    "success": evaluation.get("executor_success"),
+                    "reason": evaluation.get("executor_reason", "")
+                }
+                if evaluation.get("verified") is not None:
+                    test_info.verification_phase2 = {
+                        "verified": evaluation.get("verified"),
+                        "confidence": evaluation.get("verification_confidence"),
+                        "reason": evaluation.get("executor_reason", ""),
+                    }
     
     # 分析用のLLMを初期化
     analysis_llm = ChatOpenAI(
         model=cfg.evaluation_model,
         timeout=OPENAI_TIMEOUT,
         max_retries=OPENAI_MAX_RETRIES,
+        temperature=0,
     )
     
-    # ステップ履歴を整形
-    step_history_text = ""
-    for i, step_info in enumerate(step_history, 1):
-        status = "✅ 成功" if step_info.get("success", False) else "❌ 失敗"
-        step_history_text += f"{i}. [{status}] {step_info.get('step', 'Unknown step')}\n"
-        step_history_text += f"   応答: {step_info.get('response', 'No response')[:200]}...\n\n"
+    # FailureReportGeneratorと同じプロンプト形式を使用
+    prompt = _build_analysis_prompt(test_info)
     
-    # past_stepsも整形
-    past_steps_text = ""
-    for step, result in state.get("past_steps", []):
-        past_steps_text += f"- ステップ: {step}\n  結果: {str(result)[:200]}...\n\n"
-    
-    # 失敗タイプに応じてプロンプトを設定
-    if failure_type == FailureType.REPLAN_LIMIT:
-        situation_desc = f"テスト実行がリプラン回数の制限（{replan_count}回）に達して終了した状況"
-        output_header = "リプラン回数制限到達の分析"
-    else:  # TEST_FAILURE およびその他
-        situation_desc = "テストが目標を達成できずに失敗した状況"
-        output_header = "テスト失敗の原因分析"
-    
-    system_prompt = f"""あなたはソフトウェアテストの専門家です。
-{situation_desc}を分析し、原因を特定してください。
-
-以下の3つの可能性について言及してください：
-1. **テストケースの問題**: テストシナリオや期待値の設定が不適切である可能性
-2. **テスト対象アプリの問題**: アプリ自体のバグ、UIの変更、応答遅延などの可能性
-3. **テストフレームワーク(smartestiroid)の問題**: ツールの不具合、タイムアウト設定、要素検出の問題など
-
-分析結果はPlantextで以下の形式で出力してください：
----
-{output_header}:
-
-事実:
-何が起きたかの客観的な記述をしなさい
-
-推定原因:
-- テストケースの問題
-- テスト対象アプリの問題
-- テストフレームワークの問題
-
-推奨アクション:
-問題解決のための具体的な提案を記述しなさい
----
-"""
-
-    user_prompt = f"""以下のテスト実行が失敗しました。
-原因を分析してください。
-
-## テスト入力
-{state.get("input", "不明")}
-
-## 実行されたステップ履歴
-{step_history_text if step_history_text else "履歴なし"}
-
-## 過去のステップと結果
-{past_steps_text if past_steps_text else "履歴なし"}
-
-## 現在の計画
-{state.get("plan", [])}
-"""
-
     # LLMプロンプトをログ出力
     SLog.log(LogCategory.LLM, LogEvent.START, {
         "method": "analyze_test_failure",
         "model": cfg.evaluation_model,
-        "system_prompt": system_prompt,
-        "user_prompt": user_prompt
+        "prompt": prompt[:1000]
     }, "LLMプロンプト送信: analyze_test_failure", attach_to_allure=True)
 
     try:
-        response = await analysis_llm.ainvoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt),
-        ])
+        # Structured Outputを使用
+        structured_llm = analysis_llm.with_structured_output(FailureAnalysis)
+        result: FailureAnalysis = await structured_llm.ainvoke([HumanMessage(content=prompt)])
+        
+        # plaintext形式で出力
+        plaintext_result = result.to_plaintext()
         
         # LLMレスポンスをログ出力
         SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
-            "analysis": response.content[:500] if len(response.content) > 500 else response.content
+            "failure_category": result.failure_category,
+            "summary": result.summary,
+            "confidence": result.confidence
         }, "原因分析完了")
-        SLog.attach_text(f"## 🔍 原因分析結果\n\n{response.content}", "💡 LLM Response: Failure Analysis")
+        SLog.attach_text(f"## 🔍 原因分析結果\n\n{plaintext_result}", "💡 LLM Response: Failure Analysis")
         
-        return response.content
+        return plaintext_result
     except Exception as e:
         SLog.error(LogCategory.ANALYZE, LogEvent.FAIL, {"error": str(e)}, "原因分析エラー")
         return f"原因分析中にエラーが発生しました: {str(e)}"
+
+
+def _build_analysis_prompt(test_info) -> str:
+    """分析用プロンプトを構築（FailureReportGeneratorと同一形式）"""
+    prompt = f"""あなたはモバイルアプリテスト自動化の専門家です。
+以下のテスト失敗を分析し、構造化された分析結果を出力してください。
+
+## テスト情報
+- **テストID**: {test_info.test_id}
+- **テスト名**: {test_info.title}
+- **テスト手順**:
+{test_info.steps}
+- **期待結果**: {test_info.expected}
+
+## 進捗状況
+- 完了ステップ: {len(test_info.completed_steps)}
+- 失敗したステップ: {test_info.failed_step or "不明"}
+"""
+    
+    if test_info.progress_summary:
+        prompt += f"\n### 進捗サマリー\n{test_info.progress_summary}\n"
+    
+    if test_info.last_screen_type:
+        prompt += f"\n## 直前の画面状態\n- 画面タイプ: {test_info.last_screen_type}\n"
+    
+    error_msg = test_info.error_message[:500] if test_info.error_message else "不明"
+    prompt += f"""
+## エラー情報
+- **エラータイプ**: {test_info.error_type or "不明"}
+- **エラー内容**: {error_msg}
+"""
+    
+    if test_info.verification_phase1:
+        prompt += f"""
+## LLM検証結果（Phase 1）
+- success: {test_info.verification_phase1.get("success")}
+- reason: {str(test_info.verification_phase1.get("reason", ""))[:300]}
+"""
+    
+    if test_info.verification_phase2:
+        prompt += f"""
+## LLM検証結果（Phase 2）
+- verified: {test_info.verification_phase2.get("verified")}
+- confidence: {test_info.verification_phase2.get("confidence")}
+- reason: {str(test_info.verification_phase2.get("reason", ""))[:300]}
+- discrepancy: {test_info.verification_phase2.get("discrepancy")}
+"""
+    
+    prompt += """
+## 分析の観点
+1. **failure_category**: 最も該当するカテゴリを1つ選択
+   - APPIUM_CONNECTION_ERROR: Appiumサーバーとの接続問題
+   - ELEMENT_NOT_FOUND: 画面要素が見つからない
+   - VERIFICATION_FAILED: LLMによる画面検証が失敗
+   - TIMEOUT: 操作のタイムアウト
+   - LLM_JUDGMENT_ERROR: LLMの判断ミス
+   - APP_CRASH: アプリのクラッシュ
+   - SESSION_ERROR: Appiumセッションの問題
+   - UNKNOWN: 上記に該当しない
+
+2. **summary**: 何が起きたかを1文で（技術用語を使わず簡潔に）
+
+3. **root_causes**: 技術的な原因（1-3個、箇条書き用）
+
+4. **recommendations**: 具体的な対処法（優先度順、1-3個、実行可能なアクション）
+
+5. **confidence**: 分析の確信度
+   - HIGH: ログから原因が明確に特定できる
+   - MEDIUM: 原因は推定できるが確定ではない
+   - LOW: 情報が不足しており推測の要素が大きい
+
+## 重要
+- 推測は避け、ログから読み取れる事実に基づくこと
+- リコメンデーションは実行可能な具体的アクションにすること
+"""
+    return prompt
 
 
 async def evaluate_step_execution(

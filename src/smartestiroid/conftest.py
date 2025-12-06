@@ -252,19 +252,44 @@ def pytest_collection_finish(session):
     total = len(session.items)
     sys._pytest_total_tests = total
     
+    # セッション統計を更新
+    if hasattr(sys, '_pytest_session_stats'):
+        sys._pytest_session_stats["total"] = total
+    
     # 各テストに正しい順番を再設定
     for i, item in enumerate(session.items, 1):
         item._test_progress_current = i
         item._test_progress_total = total
         sys._pytest_test_order[item.name] = i
     
-    SLog.log(LogCategory.TEST, LogEvent.UPDATE, {"total": total}, f"[PROGRESS] {{\"total\": {total}, \"status\": \"collected\"}}")
+    # テスト総数をログ出力（解析用）
+    SLog.log(LogCategory.SESSION, LogEvent.COLLECT, {
+        "total_tests": total,
+        "test_ids": [item.name for item in session.items]
+    }, f"テスト収集完了: {total}件のテストを実行します")
 
 
 def pytest_runtest_setup(item):
     """各テスト実行前に現在のテストアイテムを保存"""
     import sys
     sys._pytest_current_item = item
+
+
+def pytest_runtest_logreport(report):
+    """各テスト実行後に結果を記録"""
+    import sys
+    
+    # call フェーズ（実際のテスト実行）の結果のみを記録
+    if report.when == "call":
+        if hasattr(sys, '_pytest_session_stats'):
+            stats = sys._pytest_session_stats
+            
+            if report.passed:
+                stats["passed"] += 1
+            elif report.failed:
+                stats["failed"] += 1
+            elif report.skipped:
+                stats["skipped"] += 1
 
 
 def pytest_sessionstart(session):
@@ -285,22 +310,48 @@ def pytest_sessionstart(session):
     # セッション全体で共有するためにグローバル変数に保存
     sys._pytest_run_log_dir = run_log_dir
     
+    # セッション統計を初期化
+    sys._pytest_session_stats = {
+        "total": 0,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "start_time": time.time()
+    }
+    
     # ログを初期化（実行ごとのフォルダ内に保存）
     SLog.init(test_id="session", output_dir=run_log_dir)
-    SLog.info(LogCategory.TEST, LogEvent.START, {
-        "event": "session_start",
+    SLog.log(LogCategory.SESSION, LogEvent.START, {
+        "timestamp": run_timestamp,
         "log_dir": str(run_log_dir)
-    }, f"Test Session Started (logs: {run_log_dir.name})")
+    }, f"テストセッション開始 (ログ: {run_log_dir.name})")
 
 
 def pytest_sessionfinish(session, exitstatus):
     """テストセッション終了時に全体の課金情報をAllureレポートに書き込む"""
+    import sys
+    
+    # テスト結果サマリーをログ出力
+    if hasattr(sys, '_pytest_session_stats'):
+        stats = sys._pytest_session_stats
+        elapsed_time = time.time() - stats.get("start_time", 0)
+        
+        # SESSION/SUMMARYイベントで統計を出力（解析しやすい形式）
+        SLog.log(LogCategory.SESSION, LogEvent.SUMMARY, {
+            "total_tests": stats.get("total", 0),
+            "passed": stats.get("passed", 0),
+            "failed": stats.get("failed", 0),
+            "skipped": stats.get("skipped", 0),
+            "elapsed_seconds": round(elapsed_time, 2),
+            "exit_status": exitstatus
+        }, f"テスト結果サマリー: 総数={stats.get('total', 0)}, 成功={stats.get('passed', 0)}, 失敗={stats.get('failed', 0)}, スキップ={stats.get('skipped', 0)}")
+    
     SLog.info(LogCategory.TOKEN, LogEvent.START, {"event": "generating_report"}, "Generating Global Token Usage Report")
     
     # テスト終了時のステータスをログ出力
     exit_status_map = {0: "PASSED", 1: "FAILED", 2: "INTERRUPTED", 5: "NO_TESTS"}
     status_str = exit_status_map.get(exitstatus, f"UNKNOWN({exitstatus})")
-    SLog.info(LogCategory.TEST, LogEvent.END, {"exit_status": exitstatus, "status": status_str}, f"Test Session Finished: {status_str}")
+    SLog.log(LogCategory.SESSION, LogEvent.END, {"exit_status": exitstatus, "status": status_str}, f"テストセッション終了: {status_str}")
     
     # グローバル統計のテキストはコンソールに出力しない
     global_summary_text = TiktokenCountCallback.format_global_summary()
@@ -433,11 +484,7 @@ def _generate_log_analysis():
         # 失敗レポートを生成
         try:
             log_dir = log_file.parent
-            generator = FailureReportGenerator(
-                log_dir=log_dir,
-                use_llm=True,  # LLM分析を使用
-                model_name="gpt-4.1-mini"
-            )
+            generator = FailureReportGenerator(log_dir=log_dir)
             report_path = generator.generate_report()
             SLog.info(
                 LogCategory.SESSION,
