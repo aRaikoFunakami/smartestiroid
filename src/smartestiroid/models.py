@@ -41,6 +41,33 @@ class Plan(BaseModel):
     """
     steps: List[str] = Field(description="実行すべき手順の一覧（順序通りに並べる）")
     reasoning: Optional[str] = Field(default=None, description="このステップ列を選択した根拠の要約（100〜400文字程度）")
+    
+    def to_log_dict(self) -> dict:
+        """ログ出力用の辞書を返す"""
+        return {
+            "step_count": len(self.steps),
+            "steps": self.steps,
+            "reasoning": self.reasoning
+        }
+    
+    def to_allure_text(self) -> str:
+        """Allure表示用の整形されたテキストを返す"""
+        lines = [
+            f"## 📋 実行計画 ({len(self.steps)}ステップ)",
+            ""
+        ]
+        for i, step in enumerate(self.steps, 1):
+            lines.append(f"{i}. {step}")
+        
+        if self.reasoning:
+            lines.extend([
+                "",
+                "---",
+                "### 💭 理由",
+                self.reasoning
+            ])
+        
+        return "\n".join(lines)
 
 
 # --- Response Model ---
@@ -53,6 +80,22 @@ class Response(BaseModel):
     """
     status: Literal["RESULT_PASS", "RESULT_FAIL"] = Field(description="判定結果ステータス")
     reason: str = Field(description="詳細な判定理由（100〜600文字程度。根拠要素/手順対応/不足点/改善提案を含め可）")
+    
+    def to_log_dict(self) -> dict:
+        """ログ出力用の辞書を返す"""
+        return {
+            "status": self.status,
+            "reason": self.reason
+        }
+    
+    def to_allure_text(self) -> str:
+        """Allure表示用の整形されたテキストを返す"""
+        status_icon = "✅" if self.status == "RESULT_PASS" else "❌"
+        return f"""## {status_icon} テスト結果: {self.status}
+
+### 判定理由
+{self.reason}
+"""
 
 
 class Act(BaseModel):
@@ -99,6 +142,34 @@ class StepExecutionResult(BaseModel):
     executed_action: str = Field(description="実際に実行した操作の説明（例：'resource-id com.app:id/button をタップした'）")
     expected_screen_change: Optional[str] = Field(default=None, description="操作後に期待される画面変化の説明（例：'ホーム画面に遷移する'、'ダイアログが表示される'）。Executorは実行後の画面を確認できないため、期待値として記述する")
     no_page_source_change: bool = Field(default=False, description="page_sourceに影響を与えないツールのみを実行した場合はTrue。例：find_element, verify_screen_content, get_page_source, screenshot等の確認・取得系ツール")
+    
+    def to_allure_text(self) -> str:
+        """Allure表示用の整形されたテキストを返す"""
+        status_icon = "✅" if self.success else "❌"
+        lines = [
+            f"## {status_icon} ステップ実行結果: {'成功' if self.success else '失敗'}",
+            "",
+            "### 実行した操作",
+            self.executed_action,
+            "",
+            "### 判断理由",
+            self.reason,
+        ]
+        
+        if self.expected_screen_change:
+            lines.extend([
+                "",
+                "### 期待される画面変化",
+                self.expected_screen_change
+            ])
+        
+        if self.no_page_source_change:
+            lines.extend([
+                "",
+                "> ℹ️ page_sourceに影響なし（確認・取得系ツールのみ）"
+            ])
+        
+        return "\n".join(lines)
 
 
 class StepVerificationResult(BaseModel):
@@ -116,6 +187,30 @@ class StepVerificationResult(BaseModel):
     confidence: float = Field(description="判断の確信度（0.0〜1.0）。0.7未満は要注意")
     reason: str = Field(description="検証結果の判断理由（100〜300文字程度）")
     discrepancy: Optional[str] = Field(default=None, description="矛盾点や疑問点がある場合の説明")
+    
+    def to_allure_text(self) -> str:
+        """Allure表示用の整形されたテキストを返す"""
+        status_icon = "✅" if self.verified else "❌"
+        confidence_bar = "█" * int(self.confidence * 10) + "░" * (10 - int(self.confidence * 10))
+        confidence_warning = " ⚠️" if self.confidence < 0.7 else ""
+        
+        lines = [
+            f"## {status_icon} 検証結果: {'検証成功' if self.verified else '検証失敗'}",
+            "",
+            f"### 確信度: {self.confidence:.0%} [{confidence_bar}]{confidence_warning}",
+            "",
+            "### 判断理由",
+            self.reason,
+        ]
+        
+        if self.discrepancy:
+            lines.extend([
+                "",
+                "### ⚠️ 矛盾点・疑問点",
+                self.discrepancy
+            ])
+        
+        return "\n".join(lines)
 
 
 # --- Decision Model ---
@@ -128,6 +223,22 @@ class DecisionResult(BaseModel):
     """
     decision: Literal["PLAN", "RESPONSE"] = Field(description="次に返すべきアクション種別 (PLAN|RESPONSE)")
     reason: str = Field(description="判断理由（1〜200文字程度）")
+    
+    def to_log_dict(self) -> dict:
+        """ログ出力用の辞書を返す"""
+        return {
+            "decision": self.decision,
+            "reason": self.reason
+        }
+    
+    def to_allure_text(self) -> str:
+        """Allure表示用の整形されたテキストを返す"""
+        decision_icon = "📋" if self.decision == "PLAN" else "✅"
+        return f"""## {decision_icon} 次のアクション: {self.decision}
+
+### 判断理由
+{self.reason}
+"""
 
 
 # --- Evaluation Model ---
@@ -140,5 +251,19 @@ class EvaluationResult(BaseModel):
     """
     status: Literal["RESULT_PASS", "RESULT_SKIP", "RESULT_FAIL"] = Field(description="判定結果ステータス")
     reason: str = Field(description="詳細な判定理由（100〜600文字程度。根拠要素/手順対応/不足点/改善提案を含め可）")
+    
+    def to_allure_text(self) -> str:
+        """Allure表示用の整形されたテキストを返す"""
+        status_icons = {
+            "RESULT_PASS": "✅",
+            "RESULT_SKIP": "⏭️",
+            "RESULT_FAIL": "❌"
+        }
+        status_icon = status_icons.get(self.status, "❓")
+        return f"""## {status_icon} 評価結果: {self.status}
+
+### 評価理由
+{self.reason}
+"""
 
 

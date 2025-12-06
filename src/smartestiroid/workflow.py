@@ -9,8 +9,8 @@ import allure
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END
 
-from .models import PlanExecute, Response
-from .progress import ExecutionProgress, ObjectiveProgress, ExecutedAction
+from .models import PlanExecute, Response, Plan
+from .progress import ExecutionProgress, ExecutedAction
 from .config import KNOWHOW_INFO, RESULT_PASS, RESULT_FAIL
 # モデル変数（planner_model等）は pytest_configure で動的に変更されるため、
 # 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
@@ -125,13 +125,29 @@ async def analyze_test_failure(
 {state.get("plan", [])}
 """
 
+    # LLMプロンプトをログ出力
+    SLog.log(LogCategory.LLM, LogEvent.START, {
+        "method": "analyze_test_failure",
+        "model": cfg.evaluation_model,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt
+    }, "LLMプロンプト送信: analyze_test_failure", attach_to_allure=True)
+
     try:
         response = await analysis_llm.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ])
+        
+        # LLMレスポンスをログ出力
+        SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
+            "analysis": response.content[:500] if len(response.content) > 500 else response.content
+        }, "原因分析完了")
+        SLog.attach_text(f"## 🔍 原因分析結果\n\n{response.content}", "💡 LLM Response: Failure Analysis")
+        
         return response.content
     except Exception as e:
+        SLog.error(LogCategory.ANALYZE, LogEvent.FAIL, {"error": str(e)}, "原因分析エラー")
         return f"原因分析中にエラーが発生しました: {str(e)}"
 
 
@@ -198,6 +214,12 @@ success = False の条件:
 厳格なJSON形式
 """
     
+    # LLMプロンプトをログ出力
+    SLog.log(LogCategory.LLM, LogEvent.START, {
+        "method": "evaluate_step_execution",
+        "prompt": prompt
+    }, "LLMプロンプト送信: evaluate_step_execution", attach_to_allure=True)
+    
     structured_llm = llm.with_structured_output(StepExecutionResult)
     
     if token_callback:
@@ -205,6 +227,16 @@ success = False の条件:
             result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
     else:
         result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
+    
+    # LLMレスポンスをログ出力
+    SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
+        "success": result.success,
+        "reason": result.reason,
+        "executed_action": result.executed_action,
+        "expected_screen_change": result.expected_screen_change,
+        "no_page_source_change": result.no_page_source_change
+    }, f"Executor評価完了: success={result.success}")
+    SLog.attach_text(result.to_allure_text(), "💡 LLM Response: Step Execution")
     
     return result
 
@@ -301,6 +333,13 @@ Executorの自己評価が正しいかを、実行後の画面状態と突き合
     if screenshot_url_after:
         content_blocks.append({"type": "image_url", "image_url": {"url": screenshot_url_after}})
     
+    # LLMプロンプトをログ出力
+    SLog.log(LogCategory.LLM, LogEvent.START, {
+        "method": "verify_step_execution",
+        "prompt": prompt,
+        "has_image": bool(screenshot_url_after)
+    }, "LLMプロンプト送信: verify_step_execution", attach_to_allure=True)
+    
     structured_llm = llm.with_structured_output(StepVerificationResult)
     
     if token_callback:
@@ -308,6 +347,15 @@ Executorの自己評価が正しいかを、実行後の画面状態と突き合
             result = await structured_llm.ainvoke([HumanMessage(content=content_blocks)])
     else:
         result = await structured_llm.ainvoke([HumanMessage(content=content_blocks)])
+    
+    # LLMレスポンスをログ出力
+    SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
+        "verified": result.verified,
+        "confidence": result.confidence,
+        "reason": result.reason,
+        "discrepancy": result.discrepancy
+    }, f"検証完了: verified={result.verified}, confidence={result.confidence}")
+    SLog.attach_text(result.to_allure_text(), "💡 LLM Response: Step Verification")
     
     return result
 
@@ -382,8 +430,7 @@ def create_workflow_functions(
             image_url = await screenshot_tool.ainvoke({"as_data_url": True})
             ui_elements = await get_page_source_tool.ainvoke({})
             
-            # ログとAllureには整形したロケーター情報を出力
-            SLog.attach_locator_info(ui_elements, "Locator Information")
+            # ログにスクリーンショットを添付
             if image_url:
                 SLog.attach_screenshot(image_url, label="Current Screen")
             
@@ -413,7 +460,7 @@ def create_workflow_functions(
 【厳格ルール】
 - ツールを用いて、上記のステップ「{task}」のみを実行しなさい
 
-【アプリ操作の優先ツール】
+【ツール使用時の厳格ルール】
 以下の操作は、明示的な指示がない限り専用ツールを優先的に使用すること:
 - アプリを起動する → activate_app(app_id) を使用
 - アプリを終了する → terminate_app(app_id) を使用
@@ -459,8 +506,6 @@ def create_workflow_functions(
                 # ツール呼び出し履歴を Allure に保存
                 tool_callback.save_to_allure(step_name=task)
                 
-                SLog.attach_text(agent_response["messages"][-1].content, f"Response [model: {cfg.execution_model}]")
-                
                 # === Phase 1: Executor自己評価 ===
                 SLog.info(LogCategory.LLM, LogEvent.VERIFY_REQUEST, {"phase": 1, "step": task}, "Phase 1: ステップ実行結果を評価中...")
                 tool_calls_summary = tool_callback.get_summary() if hasattr(tool_callback, 'get_summary') else "N/A"
@@ -481,10 +526,6 @@ def create_workflow_functions(
                     "expected_screen_change": evaluation_result.expected_screen_change,
                     "no_page_source_change": evaluation_result.no_page_source_change
                 }, f"Executor評価: success={evaluation_result.success}")
-                SLog.attach_text(
-                    f"success: {evaluation_result.success}\nreason: {evaluation_result.reason}\nexecuted_action: {evaluation_result.executed_action}\nexpected_screen_change: {evaluation_result.expected_screen_change}\nno_page_source_change: {evaluation_result.no_page_source_change}",
-                    "📊 Phase 1: Executor Self-Evaluation"
-                )
                 
                 # === Phase 2: 独立検証（Executor評価がTrueの場合のみ） ===
                 step_success = False
@@ -513,10 +554,6 @@ def create_workflow_functions(
                         "reason": verification_result.reason,
                         "discrepancy": verification_result.discrepancy
                     }, f"検証結果: verified={verification_result.verified}, confidence={verification_result.confidence:.2f}")
-                    SLog.attach_text(
-                        f"verified: {verification_result.verified}\nconfidence: {verification_result.confidence}\nreason: {verification_result.reason}\ndiscrepancy: {verification_result.discrepancy or 'None'}",
-                        "✅ Phase 2: Independent Verification"
-                    )
                     
                     # 両方がTrueで確信度が0.7以上の場合のみ成功とする
                     step_success = verification_result.verified and verification_result.confidence >= 0.7
@@ -537,16 +574,10 @@ def create_workflow_functions(
                 elapsed = time.time() - start_time
                 SLog.attach_text(f"{elapsed:.3f} seconds", "⏱️Execute Step Time")
                 
-                # 最終的な成功/失敗を記録
-                final_status = "✅ SUCCESS" if step_success else "❌ FAILED"
                 if step_success:
                     SLog.info(LogCategory.STEP, LogEvent.COMPLETE, {"step": task, "success": True}, f"SUCCESS: ステップ '{task}'")
                 else:
                     SLog.warn(LogCategory.STEP, LogEvent.FAIL, {"step": task, "success": False}, f"FAILED: ステップ '{task}'")
-                SLog.attach_text(
-                    f"Status: {final_status}\nPhase1 (Executor): success={evaluation_result.success}\nPhase2 (Verification): verified={verification_result.verified if verification_result else 'N/A'}, confidence={verification_result.confidence if verification_result else 'N/A'}",
-                    f"{final_status} Step Result"
-                )
 
                 # 実行されたステップを履歴に追加（評価結果に基づく）
                 step_history["executed_steps"].append(
@@ -651,10 +682,6 @@ def create_workflow_functions(
                 image_url = await screenshot_tool.ainvoke({"as_data_url": True})
                 ui_elements = await get_page_source_tool.ainvoke({})
 
-                if ui_elements:
-                    # ログとAllureには整形したロケーター情報を出力
-                    SLog.attach_locator_info(ui_elements, "Locator Information")
-
                 if image_url:
                     SLog.attach_screenshot(image_url, label="Screenshot before Planning")
 
@@ -755,15 +782,6 @@ def create_workflow_functions(
                 SLog.info(LogCategory.PLAN, LogEvent.COMPLETE, {"objective": current_objective.description[:50], "steps": len(plan.steps)}, f"目標「{current_objective.description[:50]}...」の実行計画: {len(plan.steps)}ステップ")
                 SLog.debug(LogCategory.PLAN, LogEvent.UPDATE, {"plan": plan.steps}, None)
 
-                # ステップを番号付きリストに整形し、reasoning も含める
-                formatted_steps = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan.steps))
-                if plan.reasoning:
-                    formatted_output = f"【計画の根拠】\n{plan.reasoning}\n\n【実行ステップ】\n{formatted_steps}"
-                else:
-                    formatted_output = formatted_steps
-                    
-                SLog.attach_text(formatted_output, f"🎯Plan [model: {cfg.planner_model}]")
-
                 elapsed = time.time() - start_time
                 SLog.attach_text(f"{elapsed:.3f} seconds", f"⏱️ Plan Step Time : {elapsed:.3f} seconds")
 
@@ -813,14 +831,14 @@ def create_workflow_functions(
         
         with allure.step(f"Action: Replan [Attempt #{current_replan_count+1}]"):
             import time
-            
-            # 進捗サマリーをAllureに添付
-            if progress_summary:
-                SLog.attach_text(progress_summary, "📊 Execution Progress Before Replan")
-            
+
             # 目標進捗をAllureに添付
             if objective_summary:
                 SLog.attach_text(objective_summary, "🎯 Objective Progress Before Replan")
+                     
+            # 進捗サマリーをAllureに添付
+            if progress_summary:
+                SLog.attach_text(progress_summary, "📊 Execution Progress Before Replan")
 
             start_time = time.time()
             # リプラン回数制限チェック
@@ -862,10 +880,6 @@ def create_workflow_functions(
                 image_url = await screenshot_tool.ainvoke({"as_data_url": True})
                 ui_elements = await get_page_source_tool.ainvoke({})
 
-                if ui_elements:
-                    # ログとAllureには整形したロケーター情報を出力
-                    SLog.attach_locator_info(ui_elements, "Locator Information")
-
                 # 前回画像がある場合は比較用として添付
                 if previous_image_url:
                     SLog.attach_screenshot(previous_image_url, label="Previous Screenshot (Before Action)")
@@ -892,11 +906,6 @@ def create_workflow_functions(
                 objective_progress = objective_progress_cache.get("progress")
 
                 if isinstance(replan_result.action, Response):
-                    SLog.attach_text(
-                        f"Status: {replan_result.action.status}\n\nReason:\n{replan_result.action.reason}",
-                        "Replan Response"
-                    )
-
                     evaluated_response = f"{replan_result.action.reason}\n\n{replan_result.action.status}"
 
                     # セーフガード: 目標未達成なのにPASSを返そうとしている場合は警告
@@ -933,8 +942,6 @@ def create_workflow_functions(
                             replanner_judgment,
                             state_analysis,
                         )
-
-                    SLog.attach_text(evaluated_response, f"Final Evalution [model: {cfg.evaluation_model}]")
 
                     # PASSでない場合は原因分析を実行
                     if RESULT_PASS not in evaluated_response:

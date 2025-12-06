@@ -139,6 +139,22 @@ class ObjectiveStepResult(BaseModel):
     """
     achieved: bool = Field(description="目標が達成されたかどうか")
     evidence: str = Field(description="判断根拠の説明（画面要素やロケーター情報に基づく）")
+    
+    def to_log_dict(self) -> dict:
+        """ログ出力用の辞書を返す"""
+        return {
+            "achieved": self.achieved,
+            "evidence": self.evidence
+        }
+    
+    def to_allure_text(self) -> str:
+        """Allure表示用の整形されたテキストを返す"""
+        status_icon = "✅" if self.achieved else "❌"
+        return f"""## {status_icon} 目標ステップ評価: {'達成' if self.achieved else '未達成'}
+
+### 判断根拠
+{self.evidence}
+"""
 
 
 class ObjectiveStep(BaseModel):
@@ -404,6 +420,39 @@ class ObjectiveProgress(BaseModel):
         objectives = self.get_objective_steps_only()
         return all(s.status == "completed" for s in objectives) if objectives else False
     
+    def is_all_objectives_completed_with_current(self, current_objective_achieved: bool) -> bool:
+        """現在の目標の達成状態を考慮して、全目標が完了しているかチェック
+        
+        LLMが「現在の目標達成」と判定しているが、まだステータスが更新されていない場合に使用。
+        
+        Args:
+            current_objective_achieved: 現在の目標が達成済みと判定されているか
+            
+        Returns:
+            全ての目標が完了している（または完了とみなせる）場合True
+        """
+        # まず通常のチェック
+        if self.is_all_objectives_completed():
+            return True
+        
+        # 現在の目標が達成されていない場合は、通常のチェック結果を返す
+        if not current_objective_achieved:
+            return False
+        
+        # 現在の目標が達成されている場合、それを含めて全目標達成かを判定
+        current_step = self.get_current_step()
+        if current_step and current_step.status != "completed":
+            # 現在のステップ以降に未完了の目標があるかチェック
+            remaining_after_current = [
+                s for s in self.objective_steps
+                if s.index > current_step.index and s.status not in ("completed", "skipped")
+            ]
+            if not remaining_after_current:
+                # 現在のステップ以降に未完了の目標がない → 全目標達成
+                return True
+        
+        return False
+    
     def get_progress_summary(self) -> str:
         """進捗サマリーを文字列で取得"""
         completed = self.get_completed_objectives_count()
@@ -445,10 +494,14 @@ class ObjectiveProgress(BaseModel):
         
         return "\n".join(lines)
     
-    def format_for_llm(self) -> str:
+    def format_for_llm(self, current_objective_achieved: bool = False) -> str:
         """LLM向けの包括的な進捗フォーマットを生成
         
         ユーザー目標ステップの進捗と、現在のステップの実行プラン進捗を含む。
+        
+        Args:
+            current_objective_achieved: 現在の目標が達成済みとみなす場合True
+                （LLMが達成と判定したが、まだステータス更新前の場合に使用）
         
         Returns:
             LLM向けにフォーマットされた進捗文字列
@@ -457,23 +510,32 @@ class ObjectiveProgress(BaseModel):
         total = self.get_total_objectives_count()
         current = self.get_current_step()
         
+        # ★重要★ 現在の目標が達成済みと判定されている場合、表示を調整
+        display_completed = completed
+        if current_objective_achieved and current and current.status != "completed":
+            display_completed = completed + 1
+        
         lines = [
             "【★重要★ 目標と実行プランの全体進捗】",
             "",
-            f"■ ユーザー目標進捗: {completed}/{total} 完了",
+            f"■ ユーザー目標進捗: {display_completed}/{total} 完了",
         ]
         
         # 目標ステップ一覧
         lines.append("")
         lines.append("■ 目標ステップ一覧:")
         for step in self.objective_steps:
-            status_icon = {
-                "completed": "✅",
-                "failed": "❌", 
-                "in_progress": "🔄",
-                "pending": "⏳",
-                "skipped": "⏭️"
-            }.get(step.status, "?")
+            # 現在のステップが達成済みと判定されている場合、アイコンを✅に
+            if current_objective_achieved and step.index == self.current_step_index:
+                status_icon = "✅"
+            else:
+                status_icon = {
+                    "completed": "✅",
+                    "failed": "❌", 
+                    "in_progress": "🔄",
+                    "pending": "⏳",
+                    "skipped": "⏭️"
+                }.get(step.status, "?")
             
             type_label = "🎯" if step.step_type == "objective" else "🔧"
             current_marker = " ← 現在の目標" if step.index == self.current_step_index else ""

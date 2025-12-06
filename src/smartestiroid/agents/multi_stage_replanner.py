@@ -88,6 +88,100 @@ class StateAnalysis(BaseModel):
             return False
         # それ以外はプラン継続可能
         return True
+    
+    def to_log_dict(self, plan_still_valid: bool = None) -> dict:
+        """ログ出力用の辞書を返す
+        
+        Args:
+            plan_still_valid: プラン有効性（呼び出し元で計算した値を渡す）
+        """
+        return {
+            # 画面状態
+            "screen_changes": self.screen_changes,
+            "current_screen_type": self.current_screen_type,
+            "main_elements": self.main_elements,
+            "blocking_dialogs": self.blocking_dialogs,
+            # 画面整合性
+            "screen_inconsistency": self.screen_inconsistency if self.has_screen_inconsistency() else None,
+            # 進捗評価
+            "test_progress": self.test_progress,
+            # 目標評価
+            "current_objective_achieved": self.current_objective_achieved,
+            "current_objective_evidence": self.current_objective_evidence,
+            # 提案
+            "suggested_next_action": self.suggested_next_action,
+            # 導出値（渡された場合のみ）
+            **({
+                "plan_still_valid": plan_still_valid
+            } if plan_still_valid is not None else {})
+        }
+    
+    def to_allure_text(self, plan_still_valid: bool = None) -> str:
+        """Allure表示用の整形されたテキストを返す
+        
+        Args:
+            plan_still_valid: プラン有効性（呼び出し元で計算した値を渡す）
+        """
+        # 目標達成アイコン
+        achieved_icon = "✅" if self.current_objective_achieved else "❌"
+        plan_valid_icon = "✅" if plan_still_valid else "🔄" if plan_still_valid is not None else "?"
+        
+        lines = [
+            "## 🖥️ 画面状態",
+            f"**画面タイプ:** {self.current_screen_type}",
+            "",
+            "### 画面変化",
+            self.screen_changes,
+            "",
+            "### 主要要素",
+            self.main_elements,
+            "",
+        ]
+        
+        # ブロッキングダイアログ
+        if self.blocking_dialogs:
+            lines.extend([
+                "### ⚠️ ブロッキングダイアログ",
+                f"```",
+                self.blocking_dialogs,
+                f"```",
+                "",
+            ])
+        
+        # 画面整合性
+        if self.has_screen_inconsistency():
+            lines.extend([
+                "### ⚠️ 画面整合性エラー",
+                f"```",
+                self.screen_inconsistency,
+                f"```",
+                "",
+            ])
+        
+        lines.extend([
+            "---",
+            "## 📊 進捗評価",
+            f"**テスト進捗:** {self.test_progress}",
+            "",
+            f"### {achieved_icon} 現在の目標ステップ達成: {'Yes' if self.current_objective_achieved else 'No'}",
+            f"**根拠:** {self.current_objective_evidence}",
+            "",
+        ])
+        
+        if plan_still_valid is not None:
+            lines.extend([
+                f"### {plan_valid_icon} プラン有効性: {'有効' if plan_still_valid else '再構築必要'}",
+                "",
+            ])
+        
+        if self.suggested_next_action:
+            lines.extend([
+                "---",
+                "## 💡 次のアクション提案",
+                self.suggested_next_action,
+            ])
+        
+        return "\n".join(lines)
 
 
 class MultiStageReplanner:
@@ -287,7 +381,7 @@ class MultiStageReplanner:
             "prompt": prompt_text,
             "has_previous_image": bool(previous_image_url),
             "has_current_image": bool(current_image_url)
-        }, "LLMプロンプト送信: analyze_state")
+        }, "LLMプロンプト送信: analyze_state", attach_to_allure=True)
 
         # 構造化出力を使用
         structured_llm = self.llm.with_structured_output(StateAnalysis)
@@ -300,14 +394,17 @@ class MultiStageReplanner:
         # ObjectiveProgressは必須なので、正確な残りステップ数を使用
         plan_still_valid = state_analysis.is_plan_still_valid(remaining_steps)
         
-        SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
-            "model": self.model_name,
-            "screen_type": state_analysis.current_screen_type,
-            "current_objective_achieved": state_analysis.current_objective_achieved,
-            "blocking_dialogs": state_analysis.blocking_dialogs or None,
-            "plan_still_valid": plan_still_valid,
-            "screen_inconsistency": state_analysis.screen_inconsistency if state_analysis.has_screen_inconsistency() else None
-        }, "State analysis completed")
+        # StateAnalysisの全フィールドをログ出力（JSONLファイル用）
+        SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, 
+            state_analysis.to_log_dict(plan_still_valid=plan_still_valid),
+            "State analysis completed"
+        )
+        
+        # Allure用に整形されたテキストを添付
+        SLog.attach_text(
+            state_analysis.to_allure_text(plan_still_valid=plan_still_valid),
+            "💡 LLM Response: State Analysis"
+        )
         
         return state_analysis
 
@@ -330,14 +427,14 @@ class MultiStageReplanner:
             objective_progress: 目標進捗管理オブジェクト（必須）
         """
         # ObjectiveProgressから進捗情報を取得
-        objective_and_plan_info = objective_progress.format_for_llm()
-        all_objectives_completed = objective_progress.is_all_objectives_completed()
-        completed_count = objective_progress.get_completed_objectives_count()
-        total_count = objective_progress.get_total_objectives_count()
-        
-        # 現在の目標ステップが達成されたら全目標達成かどうかを判定
-        remaining_after_current = total_count - completed_count - (1 if state_analysis.current_objective_achieved else 0)
-        is_last_objective = remaining_after_current <= 0 and state_analysis.current_objective_achieved
+        # ★重要★ state_analysis.current_objective_achieved を渡して、正しい進捗表示を生成
+        objective_and_plan_info = objective_progress.format_for_llm(
+            current_objective_achieved=state_analysis.current_objective_achieved
+        )
+        # 全目標達成判定（現在の目標の達成状態を考慮）
+        all_objectives_completed = objective_progress.is_all_objectives_completed_with_current(
+            state_analysis.current_objective_achieved
+        )
 
         # StateAnalysisから状態要約を構築
         state_summary = f"""
@@ -394,7 +491,7 @@ class MultiStageReplanner:
             "method": "decide_action",
             "model": self.model_name,
             "prompt": prompt
-        }, "LLMプロンプト送信: decide_action")
+        }, "LLMプロンプト送信: decide_action", attach_to_allure=True)
 
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(DecisionResult)
@@ -405,10 +502,11 @@ class MultiStageReplanner:
             else:
                 result = await structured_llm.ainvoke(messages)
             
-            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
-                "model": self.model_name,
-                "decision": result.decision
-            }, f"Decision: {result.decision}")
+            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, 
+                result.to_log_dict(),
+                f"Decision: {result.decision}"
+            )
+            SLog.attach_text(result.to_allure_text(), f"💡 LLM Response: Decision")
             decision_norm = result.decision.strip().upper()
             if decision_norm not in ("PLAN", "RESPONSE"):
                 decision_norm = "PLAN"  # 安全側フォールバック
@@ -572,7 +670,7 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
             "method": "_generate_dialog_handling_steps",
             "model": self.model_name,
             "prompt": prompt
-        }, "LLMプロンプト送信: _generate_dialog_handling_steps")
+        }, "LLMプロンプト送信: _generate_dialog_handling_steps", attach_to_allure=True)
 
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Plan)
@@ -584,9 +682,11 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
             else:
                 plan = await structured_llm.ainvoke(messages)
             
-            SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
-                "generated_steps": len(plan.steps)
-            }, f"生成: {len(plan.steps)}ステップ")
+            SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE,
+                plan.to_log_dict(),
+                f"生成: {len(plan.steps)}ステップ"
+            )
+            SLog.attach_text(plan.to_allure_text(), "💡 LLM Response: Dialog Handling")
             return plan.steps
         except Exception as e:
             SLog.error(LogCategory.DIALOG, LogEvent.FAIL, {"error": str(e)}, "ダイアログステップ生成エラー")
@@ -671,7 +771,7 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
             "method": "_generate_new_plan",
             "model": self.model_name,
             "prompt": prompt
-        }, "LLMプロンプト送信: _generate_new_plan")
+        }, "LLMプロンプト送信: _generate_new_plan", attach_to_allure=True)
 
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Plan)
@@ -682,9 +782,11 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
         else:
             plan = await structured_llm.ainvoke(messages)
         
-        SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
-            "generated_steps": len(plan.steps)
-        }, "新規プラン生成完了")
+        SLog.log(LogCategory.PLAN, LogEvent.COMPLETE,
+            plan.to_log_dict(),
+            "新規プラン生成完了"
+        )
+        SLog.attach_text(plan.to_allure_text(), "💡 LLM Response: New Plan")
         return plan
     
     async def build_response(
@@ -710,8 +812,14 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
         ) if past_steps else "(なし)"
         
         # ObjectiveProgressから進捗情報を取得
-        objective_and_plan_info = objective_progress.format_for_llm()
-        all_objectives_completed = objective_progress.is_all_objectives_completed()
+        # ★重要★ state_analysis.current_objective_achieved を渡して、正しい進捗表示を生成
+        objective_and_plan_info = objective_progress.format_for_llm(
+            current_objective_achieved=state_analysis.current_objective_achieved
+        )
+        # 全目標達成判定（現在の目標の達成状態を考慮）
+        all_objectives_completed = objective_progress.is_all_objectives_completed_with_current(
+            state_analysis.current_objective_achieved
+        )
         
         # StateAnalysisから状態要約を構築
         state_summary = f"""
@@ -756,7 +864,7 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
             "method": "build_response",
             "model": self.model_name,
             "prompt": prompt
-        }, "LLMプロンプト送信: build_response")
+        }, "LLMプロンプト送信: build_response", attach_to_allure=True)
 
         messages = [HumanMessage(content=prompt)]
         structured_llm = self.llm.with_structured_output(Response)
@@ -767,8 +875,9 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
         else:
             resp = await structured_llm.ainvoke(messages)
         
-        SLog.log(LogCategory.TEST, LogEvent.COMPLETE, {
-            "model": self.model_name,
-            "status": resp.status
-        }, f"Response created: {resp.status}")
+        SLog.log(LogCategory.TEST, LogEvent.COMPLETE,
+            resp.to_log_dict(),
+            f"Response created: {resp.status}"
+        )
+        SLog.attach_text(resp.to_allure_text(), "💡 LLM Response: Final Result")
         return resp

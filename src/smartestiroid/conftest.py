@@ -523,7 +523,11 @@ async def evaluate_task_result(
 # 出力仕様:
 厳密JSON
 """
-    SLog.debug(LogCategory.LLM, LogEvent.REQUEST, {"purpose": "evaluation", "prompt_length": len(evaluation_prompt)}, "[evaluate_task_result] 評価プロンプトを生成")
+    # LLMプロンプトをログ出力
+    SLog.log(LogCategory.LLM, LogEvent.START, {
+        "method": "evaluate_task_result",
+        "prompt": evaluation_prompt
+    }, "LLMプロンプト送信: evaluate_task_result", attach_to_allure=True)
 
     try:
         messages = [
@@ -539,10 +543,12 @@ async def evaluate_task_result(
         status = eval_struct.status
         reason = eval_struct.reason.strip()
 
-        if status == RESULT_PASS:
-            SLog.info(LogCategory.LLM, LogEvent.RESPONSE, {"status": status}, f"[evaluate_task_result] status={status}")
-        else:
-            SLog.warn(LogCategory.LLM, LogEvent.RESPONSE, {"status": status}, f"[evaluate_task_result] status={status}")
+        # LLMレスポンスをログ出力
+        SLog.log(LogCategory.TEST, LogEvent.COMPLETE, {
+            "status": status,
+            "reason": reason
+        }, f"評価完了: {status}")
+        SLog.attach_text(eval_struct.to_allure_text(), "💡 LLM Response: Task Evaluation")
 
         return f"{status}\n判定理由:\n{reason}"
     except Exception as e:

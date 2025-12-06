@@ -16,7 +16,6 @@ from selenium.common.exceptions import InvalidSessionIdException, StaleElementRe
 
 from .interaction import _find_element_internal, STALE_ELEMENT_RETRY_COUNT, STALE_ELEMENT_RETRY_DELAY
 from .xml_compressor import compress_xml
-from ..utils.structured_logger import SLog, LogCategory, LogEvent
 
 logger = logging.getLogger(__name__)
 
@@ -24,25 +23,17 @@ logger = logging.getLogger(__name__)
 SCREENSHOT_PATH = os.getenv("SMARTESTIROID_SCREENSHOT_PATH", "/app/data/latest_screenshot.png")
 
 
-def _save_screenshot_to_file(screenshot_base64: str, label: Optional[str] = None) -> None:
-    """スクリーンショットをファイルに保存する（UI表示用 + ログ用）
+def _save_screenshot_to_file(screenshot_base64: str) -> None:
+    """スクリーンショットをファイルに保存する（UI表示用）
     
     アトミックな書き込みを行い、読み込み側が不完全なファイルを取得しないようにする。
     一時ファイルに書き込んでから rename することで、ファイルの置き換えをアトミックに行う。
     
-    また、ログ用の画像ディレクトリにもコピーを保存する。
+    Note: ログ用のスクリーンショット保存は呼び出し元（workflow.py等）で
+    SLog.attach_screenshot()を使って行うため、ここでは行わない。
     """
     try:
         screenshot_data = base64.b64decode(screenshot_base64)
-        
-        # ログ用に画像を保存（SLogが初期化されている場合）
-        SLog.save_screenshot(
-            image_data=screenshot_data,
-            category=LogCategory.SCREEN,
-            event=LogEvent.UPDATE,
-            label=label,
-            message=None  # コンソールには出力しない
-        )
         
         # 一時ファイルに書き込み（同じディレクトリに作成してrenameがアトミックになるようにする）
         dir_path = os.path.dirname(SCREENSHOT_PATH)

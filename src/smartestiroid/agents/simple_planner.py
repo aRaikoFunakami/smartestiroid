@@ -29,6 +29,43 @@ class ScreenAnalysis(BaseModel):
     blocking_dialogs: Optional[str] = Field(default=None, description="目標達成を妨げるダイアログやオーバーレイがある場合、その内容と閉じ方")
     current_state: str = Field(description="現在の画面状態の要約（目標達成に向けた現在位置）")
     available_actions: str = Field(description="この画面で実行可能な主要なアクション")
+    
+    def to_log_dict(self) -> dict:
+        """ログ出力用の辞書を返す"""
+        return {
+            "screen_type": self.screen_type,
+            "main_elements": self.main_elements,
+            "blocking_dialogs": self.blocking_dialogs,
+            "current_state": self.current_state,
+            "available_actions": self.available_actions
+        }
+    
+    def to_allure_text(self) -> str:
+        """Allure表示用の整形されたテキストを返す"""
+        lines = [
+            f"## 📱 画面分析結果",
+            f"**画面タイプ:** {self.screen_type}",
+            "",
+            "### 現在の状態",
+            self.current_state,
+            "",
+            "### 主要要素",
+            self.main_elements,
+            "",
+            "### 実行可能なアクション",
+            self.available_actions,
+        ]
+        
+        if self.blocking_dialogs:
+            lines.extend([
+                "",
+                "### ⚠️ ブロッキングダイアログ",
+                f"```",
+                self.blocking_dialogs,
+                f"```"
+            ])
+        
+        return "\n".join(lines)
 
 
 class SimplePlanner:
@@ -108,7 +145,7 @@ class SimplePlanner:
             "model": self.model_name,
             "system_prompt": system_prompt,
             "user_prompt": human_message
-        }, "LLMプロンプト送信: analyze_screen")
+        }, "LLMプロンプト送信: analyze_screen", attach_to_allure=True)
 
         try:
             structured_llm = self.llm.with_structured_output(ScreenAnalysis)
@@ -116,9 +153,11 @@ class SimplePlanner:
             with self.token_callback.track_query():
                 analysis = await structured_llm.ainvoke(messages)
             
-            SLog.log(LogCategory.SCREEN, LogEvent.COMPLETE, {
-                "screen_type": analysis.screen_type
-            }, "画面分析完了")
+            SLog.log(LogCategory.SCREEN, LogEvent.COMPLETE,
+                analysis.to_log_dict(),
+                "画面分析完了"
+            )
+            SLog.attach_text(analysis.to_allure_text(), "💡 LLM Response: Screen Analysis")
             return analysis
             
         except Exception as e:
@@ -192,7 +231,7 @@ class SimplePlanner:
             "method": "parse_objective_steps",
             "model": self.model_name,
             "prompt": prompt
-        }, "LLMプロンプト送信: parse_objective_steps")
+        }, "LLMプロンプト送信: parse_objective_steps", attach_to_allure=True)
 
         try:
             structured_llm = self.llm.with_structured_output(ParsedObjectiveSteps)
@@ -204,6 +243,10 @@ class SimplePlanner:
                 "step_count": len(result.steps),
                 "steps": result.steps
             }, f"目標ステップ解析完了: {len(result.steps)}ステップ")
+            
+            # Allure用に整形されたテキストを添付
+            steps_text = "\n".join([f"{i+1}. {step}" for i, step in enumerate(result.steps)])
+            SLog.attach_text(f"## 🎯 目標ステップ ({len(result.steps)}ステップ)\n\n{steps_text}", "💡 LLM Response: Objective Steps")
             
             # ObjectiveProgressを構築
             objective_steps = [
@@ -291,7 +334,7 @@ class SimplePlanner:
 【厳格ルール】
 - 目標の意味を変えない、拡大解釈しない
 - 「確認する」が目標なら確認のみ（操作は不要）
-- 「起動する」が目標で既に起動済みなら「起動済みを確認」のみ
+- 「起動する」が目標で既に起動済みの場合でも必ず app_activate を使って起動する
 - 勝手にアクションを追加しない
 """
 
@@ -310,7 +353,7 @@ class SimplePlanner:
             "model": self.model_name,
             "prompt": prompt,
             "has_image": bool(image_url)
-        }, "LLMプロンプト送信: create_execution_plan_for_objective")
+        }, "LLMプロンプト送信: create_execution_plan_for_objective", attach_to_allure=True)
 
         try:
             structured_llm = self.llm.with_structured_output(Plan)
@@ -318,10 +361,11 @@ class SimplePlanner:
             with self.token_callback.track_query():
                 plan = await structured_llm.ainvoke(messages)
             
-            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
-                "action_count": len(plan.steps),
-                "steps": plan.steps
-            }, f"実行計画生成完了: {len(plan.steps)}アクション")
+            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE,
+                plan.to_log_dict(),
+                f"実行計画生成完了: {len(plan.steps)}アクション"
+            )
+            SLog.attach_text(plan.to_allure_text(), "💡 LLM Response: Execution Plan")
             
             return plan
             
@@ -393,7 +437,7 @@ class SimplePlanner:
             "model": self.model_name,
             "prompt": prompt,
             "has_image": bool(image_url)
-        }, "LLMプロンプト送信: evaluate_objective_completion")
+        }, "LLMプロンプト送信: evaluate_objective_completion", attach_to_allure=True)
 
         try:
             structured_llm = self.llm.with_structured_output(ObjectiveStepResult)
@@ -404,8 +448,10 @@ class SimplePlanner:
             status_icon = "✅" if result.achieved else "❌"
             SLog.log(LogCategory.OBJECTIVE, LogEvent.COMPLETE if result.achieved else LogEvent.FAIL, {
                 "objective": objective_step.description[:30],
-                "achieved": result.achieved
+                "achieved": result.achieved,
+                "evidence": result.evidence
             }, f"{status_icon} 目標「{objective_step.description[:30]}...」: {'達成' if result.achieved else '未達成'}")
+            SLog.attach_text(result.to_allure_text(), "💡 LLM Response: Objective Evaluation")
             
             return result
             
@@ -469,7 +515,7 @@ class SimplePlanner:
             "model": self.model_name,
             "prompt": prompt,
             "has_image": bool(image_url)
-        }, "LLMプロンプト送信: create_recovery_plan")
+        }, "LLMプロンプト送信: create_recovery_plan", attach_to_allure=True)
 
         try:
             structured_llm = self.llm.with_structured_output(Plan)
@@ -478,9 +524,11 @@ class SimplePlanner:
                 plan = await structured_llm.ainvoke(messages)
             
             description = f"障害物を回避: {blocking_reason[:50]}..."
-            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
-                "action_count": len(plan.steps)
-            }, f"Recovery計画生成: {len(plan.steps)}アクション")
+            SLog.log(LogCategory.PLAN, LogEvent.COMPLETE,
+                plan.to_log_dict(),
+                f"Recovery計画生成: {len(plan.steps)}アクション"
+            )
+            SLog.attach_text(plan.to_allure_text(), "💡 LLM Response: Recovery Plan")
             
             return description, plan.steps
             
@@ -596,8 +644,10 @@ class SimplePlanner:
                         "resume_position": remaining[0][:60] if remaining else None
                     }, "🔓 ダイアログ処理モード終了 → 通常処理に復帰")
             
-            # 全目標達成判定
-            all_objectives_completed = objective_progress.is_all_objectives_completed()
+            # 全目標達成判定（現在の目標の達成状態を考慮）
+            all_objectives_completed = objective_progress.is_all_objectives_completed_with_current(
+                state_analysis.current_objective_achieved
+            )
             
             # 構造化された状態分析結果をログ出力
             if objective_progress.is_handling_dialog():
@@ -620,7 +670,6 @@ class SimplePlanner:
             SLog.log(LogCategory.ANALYZE, LogEvent.COMPLETE, {
                 "state_summary": state_summary
             }, "状態分析結果")
-            SLog.attach_text(state_summary, f"🔍 State Analysis Results [model: {self.model_name}]")
             
             SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {"stage": 2}, "🔀 Multi-stage replan: STAGE 2（Action Decision）")
             decision, reason = await self.replanner.decide_action(
@@ -634,7 +683,6 @@ class SimplePlanner:
                 "decision": decision,
                 "reason": reason
             }, f"判定結果: {decision}")
-            SLog.attach_text(f"DECISION: {decision}\n{reason}", f"⚖️ Action Decision [model: {self.model_name}]")
             
             SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {"stage": 3}, "🔀 Multi-stage replan: STAGE 3（Output Generation）")
             if decision == "RESPONSE":
@@ -663,10 +711,7 @@ class SimplePlanner:
                         "status": response.status,
                         "reason": response.reason[:100]
                     }, f"✅ Response生成完了: [{response.status}]")
-                    SLog.attach_text(
-                        f"Status: {response.status}\n\nReason:\n{response.reason}",
-                        "📋 Build Response Result"
-                    )
+
                     return Act(
                         action=response,
                         state_analysis=state_summary,

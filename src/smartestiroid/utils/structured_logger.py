@@ -327,7 +327,7 @@ class StructuredLogger:
         data: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None,
         level: str = "INFO",
-        attach_to_allure: bool = True
+        attach_to_allure: bool = False
     ):
         """ログを出力（コンソール + ファイル + Allure）
 
@@ -337,7 +337,7 @@ class StructuredLogger:
             data: 構造化データ (dict)
             message: 人間向けサマリメッセージ
             level: ログレベル (DEBUG, INFO, WARN, ERROR)
-            attach_to_allure: Allureにattachするか（デフォルトTrue）
+            attach_to_allure: Allureにattachするか（デフォルトFalse）
         """
         if not cls._enabled:
             return
@@ -370,6 +370,106 @@ class StructuredLogger:
             cls._attach_to_allure(category, event, data, message, level)
 
     @classmethod
+    def _format_llm_prompt(cls, data: Dict[str, Any], message: Optional[str]) -> str:
+        """LLMプロンプトを人間が読みやすい形式に整形
+        
+        Args:
+            data: ログデータ（method, model, prompt等を含む）
+            message: ログメッセージ
+            
+        Returns:
+            整形されたプロンプト文字列
+        """
+        lines = []
+        
+        # ヘッダー情報
+        method = data.get("method", "unknown")
+        model = data.get("model", "unknown")
+        
+        lines.append(f"# {method}")
+        lines.append(f"# Model: {model}")
+        
+        # 画像の有無
+        has_image = data.get("has_image") or data.get("has_current_image") or data.get("has_previous_image")
+        if has_image:
+            lines.append(f"# Has Image: Yes")
+        
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("")
+        
+        # プロンプト本文
+        prompt = data.get("prompt") or data.get("system_prompt") or ""
+        if prompt:
+            prompt_str = str(prompt)
+            # 長すぎる場合は切り詰め
+            if len(prompt_str) > 50000:
+                prompt_str = prompt_str[:50000] + "\n\n... (truncated, original length: {:,} chars)".format(len(prompt))
+            lines.append(prompt_str)
+        
+        # user_prompt がある場合（analyze_screen等）
+        user_prompt = data.get("user_prompt")
+        if user_prompt:
+            lines.append("")
+            lines.append("-" * 40)
+            lines.append("# User Prompt:")
+            lines.append(str(user_prompt))
+        
+        return "\n".join(lines)
+
+    @classmethod
+    def _format_llm_response(cls, category: str, data: Dict[str, Any], message: Optional[str]) -> str:
+        """LLMレスポンスを人間が読みやすい形式に整形
+        
+        Args:
+            category: ログカテゴリ
+            data: ログデータ
+            message: ログメッセージ
+            
+        Returns:
+            整形されたレスポンス文字列
+        """
+        lines = []
+        
+        # ヘッダー
+        lines.append(f"# LLM Response: {category}")
+        if data.get("model"):
+            lines.append(f"# Model: {data.get('model')}")
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("")
+        
+        # サマリー
+        if message:
+            lines.append(f"## Summary")
+            lines.append(message)
+            lines.append("")
+        
+        # reasoning は改行を維持して読みやすく表示
+        reasoning = data.get("reasoning")
+        if reasoning:
+            lines.append("## Reasoning")
+            lines.append(str(reasoning))
+            lines.append("")
+        
+        # steps は見やすくリスト表示
+        steps = data.get("steps")
+        if steps and isinstance(steps, list):
+            lines.append(f"## Steps ({len(steps)} items)")
+            for i, step in enumerate(steps, 1):
+                lines.append(f"  {i}. {step}")
+            lines.append("")
+        
+        # その他のデータをJSON表示（reasoning, stepsは除外）
+        excluded_keys = {"reasoning", "steps", "model"}
+        other_data = {k: v for k, v in data.items() if k not in excluded_keys}
+        if other_data:
+            lines.append("## Other Data")
+            lines.append(json.dumps(other_data, ensure_ascii=False, indent=2))
+        
+        return "\n".join(lines)
+
+    @classmethod
     def _attach_to_allure(
         cls,
         category: str,
@@ -396,6 +496,30 @@ class StructuredLogger:
             return
         
         try:
+            # === LLMプロンプトの特別処理 ===
+            if category == LogCategory.LLM and event == LogEvent.START and data:
+                method = data.get("method", "unknown")
+                formatted_content = cls._format_llm_prompt(data, message)
+                allure.attach(
+                    formatted_content,
+                    name=f"🤔 LLM Prompt: {method}",
+                    attachment_type=allure.attachment_type.TEXT
+                )
+                return
+            
+            # === LLMレスポンスの特別処理 ===
+            # LLM呼び出し後のCOMPLETE/FAILイベント（特定のカテゴリ）
+            llm_response_categories = {"SCREEN", "OBJECTIVE", "PLAN", "ANALYZE", "DIALOG", "TEST"}
+            if category in llm_response_categories and event in (LogEvent.COMPLETE, LogEvent.FAIL) and data:
+                formatted_content = cls._format_llm_response(category, data, message)
+                icon = "💡" if event == LogEvent.COMPLETE else "❌"
+                allure.attach(
+                    formatted_content,
+                    name=f"{icon} LLM Response: {category}",
+                    attachment_type=allure.attachment_type.TEXT
+                )
+                return
+            
             # アイコンを取得
             icon = cls._get_icon(event, level)
             
@@ -440,11 +564,14 @@ class StructuredLogger:
                     try:
                         image_path = Path(data["image_path"])
                         if image_path.exists():
+                            label = data.get('label') or 'Screenshot'
                             allure.attach.file(
                                 str(image_path),
-                                name=f"📷 {data.get('label', 'Screenshot')}",
+                                name=f"📷 {label}",
                                 attachment_type=allure.attachment_type.PNG
                             )
+                            # 画像をアタッチした場合はテキストはアタッチしない
+                            return
                     except Exception:
                         pass
             
@@ -640,7 +767,8 @@ class StructuredLogger:
                     "label": label,
                 },
                 message=message or f"Screenshot saved: {filename}",
-                level="INFO"
+                level="INFO",
+                attach_to_allure=True  # スクリーンショットは常にAllureにattach
             )
             
             return image_path
