@@ -665,9 +665,8 @@ def create_workflow_functions(
                 # AllureLoggerにObjectiveProgressを設定
                 tool_callback.set_objective_progress(objective_progress)
                 
-                # 目標ステップをログ出力
+                # 目標ステップをAllureに出力（ログは parse_objective_steps 内で出力済み）
                 objective_summary = objective_progress.get_progress_summary()
-                SLog.info(LogCategory.OBJECTIVE, LogEvent.START, {"objectives_count": len(objective_progress.objective_steps)}, f"目標ステップ解析完了: {len(objective_progress.objective_steps)}個")
                 SLog.debug(LogCategory.OBJECTIVE, LogEvent.UPDATE, {"summary": objective_summary}, None)
                 SLog.attach_text(objective_summary, "📋 Objective Steps (User Goals)")
 
