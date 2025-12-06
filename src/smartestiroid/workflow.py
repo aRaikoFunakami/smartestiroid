@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.graph import END
 
 from .models import PlanExecute, Response, Plan
-from .progress import ExecutionProgress, ExecutedAction
+from .progress import ExecutionProgress, ObjectiveProgress, ExecutedAction
 from .config import KNOWHOW_INFO, RESULT_PASS, RESULT_FAIL
 # モデル変数（planner_model等）は pytest_configure で動的に変更されるため、
 # 直接インポートせず cfg.planner_model のように参照する（config.py のコメント参照）
@@ -246,6 +246,7 @@ async def verify_step_execution(
     step_description: str,
     execution_result,
     page_source_after: str,
+    screenshot_url_before: str = "",
     screenshot_url_after: str = "",
     token_callback=None
 ):
@@ -256,6 +257,7 @@ async def verify_step_execution(
         step_description: 実行しようとしたステップの説明
         execution_result: Phase 1の実行結果（StepExecutionResult）
         page_source_after: 実行後のpage_source
+        screenshot_url_before: 実行前のスクリーンショットURL
         screenshot_url_after: 実行後のスクリーンショットURL
         token_callback: トークンカウンターコールバック
     
@@ -290,8 +292,6 @@ Executorは find_element, verify_screen_content, get_page_source, screenshot 等
 - 期待される画面変化: {expected_change}
 - page_sourceに影響なし: {"はい" if no_page_source_change else "いいえ"}
 {no_change_note}
-【実行後の画面状態（page_source）】
-{page_source_after}
 
 【検証タスク】
 Executorの自己評価が正しいかを、実行後の画面状態と突き合わせて検証してください。
@@ -325,11 +325,24 @@ Executorの自己評価が正しいかを、実行後の画面状態と突き合
 - 同じテキスト「同意する」でもresource-idが異なれば**別の要素**
 - 画面遷移があれば成功、なければ失敗
 
+【画像比較について】
+2枚の画像（実行前・実行後）が添付されています。
+- 1枚目: 実行前のスクリーンショット
+- 2枚目: 実行後のスクリーンショット
+視覚的な変化も確認し、page_sourceの情報と合わせて検証してください。
+
 【出力形式】
 厳格なJSON形式
+
+【実行後の画面状態（page_source）】
+{page_source_after}
 """
 
     content_blocks = [{"type": "text", "text": prompt}]
+    # 実行前のスクリーンショットを追加（1枚目）
+    if screenshot_url_before:
+        content_blocks.append({"type": "image_url", "image_url": {"url": screenshot_url_before}})
+    # 実行後のスクリーンショットを追加（2枚目）
     if screenshot_url_after:
         content_blocks.append({"type": "image_url", "image_url": {"url": screenshot_url_after}})
     
@@ -337,7 +350,8 @@ Executorの自己評価が正しいかを、実行後の画面状態と突き合
     SLog.log(LogCategory.LLM, LogEvent.START, {
         "method": "verify_step_execution",
         "prompt": prompt,
-        "has_image": bool(screenshot_url_after)
+        "has_image_before": bool(screenshot_url_before),
+        "has_image_after": bool(screenshot_url_after)
     }, "LLMプロンプト送信: verify_step_execution", attach_to_allure=True)
     
     structured_llm = llm.with_structured_output(StepVerificationResult)
@@ -543,6 +557,7 @@ def create_workflow_functions(
                         step_description=task,
                         execution_result=evaluation_result,
                         page_source_after=page_source_after,
+                        screenshot_url_before=image_url,  # 実行前のスクリーンショット
                         screenshot_url_after=screenshot_after,
                         token_callback=token_callback
                     )
