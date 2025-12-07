@@ -792,8 +792,16 @@ def create_workflow_functions(
                 current_objective = objective_progress.get_current_step()
                 current_objective.status = "in_progress"
                 
-                # 画面分析を実行
-                screen_analysis = await planner.analyze_screen(ui_elements, image_url, current_objective.description)
+                # 目標ステップ一覧を取得（ダイアログ判定用）
+                objective_steps_list = [step.description for step in objective_progress.objective_steps]
+                
+                # 画面分析を実行（目標ステップ一覧を渡す）
+                screen_analysis = await planner.analyze_screen(
+                    ui_elements, 
+                    image_url, 
+                    current_objective.description,
+                    objective_steps=objective_steps_list
+                )
                 
                 # ★ブロッキングダイアログチェック★
                 # blocking_dialogsがある場合はダイアログ処理モードに入り、

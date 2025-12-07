@@ -96,7 +96,7 @@ class SimplePlanner:
         }, "🔀 Multi-stage replan モード有効")
 
     async def analyze_screen(
-        self, locator: str, image_url: str, goal: str = ""
+        self, locator: str, image_url: str, goal: str = "", objective_steps: list[str] = None
     ) -> ScreenAnalysis:
         """画面を分析して現在の状態を把握する（Stage 1）
         
@@ -104,6 +104,7 @@ class SimplePlanner:
             locator: 画面のロケーター情報（XML）
             image_url: 画面のスクリーンショット（base64）
             goal: 目標（オプション、分析の参考情報として使用）
+            objective_steps: 目標ステップ一覧（オプション、ダイアログ判定に使用）
             
         Returns:
             ScreenAnalysis: 画面分析結果
@@ -115,8 +116,11 @@ class SimplePlanner:
         # 現在のアプリ情報を取得（LangChainツールとして呼び出し）
         current_app_info = await appium_tools.get_current_app.ainvoke({})
 
-        system_prompt = """あなたは画面分析のエキスパートです。
+        system_prompt = f"""あなたは画面分析のエキスパートです。
 提供された画像とロケーター情報から、現在の画面状態を正確に分析してください。
+
+【目標ステップ】
+{objective_steps}
 
 【分析の観点】
 0. アプリの種類: どのアプリか（例：Chrome、設定、カメラなど）
@@ -128,18 +132,31 @@ class SimplePlanner:
    - 通知/位置情報許可ダイアログ
    - Cookie同意バナー
    - その他のオーバーレイ
+   ★重要: ただし、目標ステップにダイアログ操作が含まれている場合は、そのダイアログはブロッキングダイアログとして扱わない
+   （例：目標に「利用規約ダイアログを確認する」があれば、利用規約ダイアログは障害物ではない）
 4. 現在の状態: 目標に向けてどの段階にいるか
 5. 実行可能なアクション: 目標に向けてこの画面で何ができるか
+
+【厳格ルール】
+目標ステップにダイアログ操作が含まれている場合は、そのダイアログはブロッキングダイアログとして扱わない
+（例：目標に「利用規約ダイアログを確認する」があれば、利用規約ダイアログは障害物ではない）
 
 【重要】
 - 画像とロケーター情報の両方を突き合わせて分析すること
 - 障害物がある場合は、それを閉じる方法（ボタンのテキストやXPath）を具体的に示すこと
+- 目標ステップにダイアログ操作が含まれている場合、そのダイアログは意図的なものなので障害物として扱わない
 """
 
         goal_context = f"\n\n【参考】目標: {goal}" if goal else ""
         
+        # 目標ステップ情報を追加
+        objective_steps_context = ""
+        if objective_steps:
+            steps_list = "\n".join([f"{i+1}. {step}" for i, step in enumerate(objective_steps)])
+            objective_steps_context = f"\n\n【目標ステップ一覧】\n{steps_list}\n※上記ステップにダイアログ操作が含まれている場合、そのダイアログはブロッキングダイアログとして扱わないでください"
+        
         human_message = f"""この画面を分析してください。
-{goal_context}
+{goal_context}{objective_steps_context}
 
 {self.app_package_info}
 
