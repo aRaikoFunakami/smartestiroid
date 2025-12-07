@@ -868,38 +868,94 @@ class SmartestiRoid:
         # knowhowの決定: メソッド引数 > インスタンス変数 > デフォルト
         effective_knowhow = knowhow if knowhow is not None else self.knowhow
 
-        # カスタムknowhowを使用する場合、新しいセッションを作成
-        async for graph in self.agent_session(self.no_reset, self.dont_stop_app_on_reset, effective_knowhow):
-            # state["input"]には純粋なタスクのみを渡す
-            # knowhowは各LLM（SimplePlanner、agent_executor）が既に持っている
-            task = (
-                f"テスト実施手順:{steps}\n\n"
-                f"テスト合否判定基準:{expected}\n"
-            )
-            inputs = {"input": task}
-            
-            if knowhow is not None:
-                SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"custom_knowhow": True}, f"カスタムknowhow情報を使用: {knowhow[:100]}...")
-
-            SLog.info(LogCategory.TEST, LogEvent.START, {"agent": "plan_and_execute"}, "Plan-and-Execute Agent 開始")
-            try:
-                final_result = {"response": ""}
-                async for event in graph.astream(inputs, config=config):
-                    for k, v in event.items():
-                        if k != "__end__":
-                            SLog.debug(LogCategory.STEP, LogEvent.UPDATE, {"event": k, "value": str(v)[:200]}, None)
-                            final_result = v
-
-            except Exception as e:
-                SLog.error(LogCategory.TEST, LogEvent.FAIL, {"error": str(e)}, f"実行中にエラーが発生しました: {e}")
-                SLog.attach_text(
-                    f"テスト実行中にエラーが発生しました:\n{e}",
-                    "❌ Test Execution Error"
+        # Appium例外発生時のリトライ管理
+        max_attempts = 2
+        final_result = {"response": ""}  # 初期化
+        
+        for attempt in range(max_attempts):
+            # カスタムknowhowを使用する場合、新しいセッションを作成
+            async for graph in self.agent_session(self.no_reset, self.dont_stop_app_on_reset, effective_knowhow):
+                # state["input"]には純粋なタスクのみを渡す
+                # knowhowは各LLM（SimplePlanner、agent_executor）が既に持っている
+                task = (
+                    f"テスト実施手順:{steps}\n\n"
+                    f"テスト合否判定基準:{expected}\n"
                 )
-                assert False, f"テスト実行中にエラーが発生しました: {e}"
-            finally:
-                SLog.info(LogCategory.TEST, LogEvent.END, {"agent": "plan_and_execute"}, "Plan-and-Execute Agent 終了")
-            # async forループは一度だけ実行されるのでbreakが不要
+                inputs = {"input": task}
+                
+                if knowhow is not None:
+                    SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"custom_knowhow": True}, f"カスタムknowhow情報を使用: {knowhow[:100]}...")
+
+                if attempt > 0:
+                    SLog.warn(LogCategory.SESSION, LogEvent.START, {
+                        "attempt": attempt + 1,
+                        "max_attempts": max_attempts
+                    }, f"🔄 リトライ {attempt + 1}/{max_attempts}: セッション再作成")
+
+                SLog.info(LogCategory.TEST, LogEvent.START, {"agent": "plan_and_execute"}, "Plan-and-Execute Agent 開始")
+                try:
+                    async for event in graph.astream(inputs, config=config):
+                        for k, v in event.items():
+                            if k != "__end__":
+                                SLog.debug(LogCategory.STEP, LogEvent.UPDATE, {"event": k, "value": str(v)[:200]}, None)
+                                final_result = v
+
+                except Exception as e:
+                    error_msg = str(e)
+                    error_type = type(e).__name__
+                    
+                    # Appium関連の例外かチェック
+                    is_appium_error = (
+                        "NoSuchDriverError" in error_msg or
+                        "session" in error_msg.lower() or
+                        "WebDriverException" in error_type or
+                        "InvalidSessionIdException" in error_type or
+                        error_type.startswith("Appium")
+                    )
+                    
+                    if is_appium_error and attempt < max_attempts - 1:
+                        # Appium例外で、まだリトライ可能な場合
+                        SLog.warn(LogCategory.SESSION, LogEvent.FAIL, {
+                            "error_type": error_type,
+                            "error": error_msg,
+                            "attempt": attempt + 1,
+                            "will_retry": True
+                        }, f"⚠️ Appium例外を検出: {error_type}. セッションを再作成してリトライします")
+                        
+                        # Allureに明示的にリトライ情報を添付
+                        retry_info = f"""# 🔄 リトライ実行
+                        
+## エラー情報
+- **エラー種別**: {error_type}
+- **エラー内容**: {error_msg}
+- **試行回数**: {attempt + 1}/{max_attempts}
+- **次の試行まで**: 30秒待機
+
+## リトライ理由
+Appium関連の例外を検出したため、セッションを再作成してリトライします。
+"""
+                        SLog.attach_text(retry_info, f"🔄 リトライ {attempt + 1}/{max_attempts}")
+                        
+                        await asyncio.sleep(30)  # リトライ前に30秒待機
+                        break  # async for graphループを抜けてリトライ
+                    else:
+                        # Appium例外以外の場合、またはリトライ上限に達した場合は即座に失敗
+                        SLog.error(LogCategory.TEST, LogEvent.FAIL, {
+                            "error_type": error_type,
+                            "error": error_msg,
+                            "attempt": attempt + 1,
+                            "is_appium_error": is_appium_error
+                        }, f"実行中にエラーが発生しました: {e}")
+                        SLog.attach_text(
+                            f"テスト実行中にエラーが発生しました:\n{e}",
+                            "❌ Test Execution Error"
+                        )
+                        assert False, f"テスト実行中にエラーが発生しました: {e}"
+                finally:
+                    SLog.info(LogCategory.TEST, LogEvent.END, {"agent": "plan_and_execute"}, "Plan-and-Execute Agent 終了")
+            
+            # 正常に完了した場合はリトライループを抜ける
+            break
 
         # validation
         result_text = final_result.get("response", None)
