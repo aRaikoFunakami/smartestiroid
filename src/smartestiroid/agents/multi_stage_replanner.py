@@ -577,9 +577,24 @@ class MultiStageReplanner:
         # ★★★ C案: ハイブリッド方式 ★★★
         # 残りステップはコード側で保護し、LLMにはブロッキングダイアログ処理のみを任せる
         
-        # ケース1: ブロッキングダイアログがなく、残りステップがある場合
+        # ★修正★ ケース1: ブロッキングダイアログがある場合（最優先でチェック）
+        # → 残りステップ数に関わらず、ダイアログ処理ステップのみをLLMに生成させる
+        if state_analysis.blocking_dialogs:
+            SLog.log(LogCategory.DIALOG, LogEvent.START, {
+                "blocking_dialogs": state_analysis.blocking_dialogs,
+                "frozen_steps": remaining_count
+            }, "🔒 ダイアログ処理: ステップ生成中")
+            dialog_steps = await self._generate_dialog_handling_steps(
+                state_analysis, locator
+            )
+            SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
+                "generated_steps": len(dialog_steps)
+            }, "🔒 ダイアログ処理ステップ生成完了")
+            return Plan(steps=dialog_steps)  # ダイアログ処理のみ（結合しない）
+        
+        # ケース2: ブロッキングダイアログがなく、残りステップがある場合
         # → LLMを呼ばずに残りステップをそのまま返す
-        if not state_analysis.blocking_dialogs and remaining_count > 0:
+        if remaining_count > 0:
             if dialog_mode:
                 # ダイアログ処理が完了し、通常処理に復帰
                 SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
@@ -591,29 +606,12 @@ class MultiStageReplanner:
                 }, "📋 通常継続")
             return Plan(steps=remaining)
         
-        # ケース2: 残りステップがない場合
+        # ケース3: ブロッキングダイアログもなく、残りステップもない場合
         # → 目標達成済みまたは次の目標へ進む必要がある（新規プラン生成が必要）
-        if remaining_count == 0:
-            SLog.log(LogCategory.PLAN, LogEvent.UPDATE, {}, "📝 残りステップなし: 新規プラン生成")
-            return await self._generate_new_plan(
-                goal, state_analysis, objective_progress, locator
-            )
-        
-        # ケース3: ブロッキングダイアログがあり、残りステップもある場合
-        # → ダイアログ処理ステップのみをLLMに生成させる
-        # → 残りステップは execution_plan に凍結されているので結合不要
-        # → ダイアログ解消後、次のreplanで残りステップが返される
-        SLog.log(LogCategory.DIALOG, LogEvent.START, {
-            "blocking_dialogs": state_analysis.blocking_dialogs,
-            "frozen_steps": remaining_count
-        }, "🔒 ダイアログ処理: ステップ生成中")
-        dialog_steps = await self._generate_dialog_handling_steps(
-            state_analysis, locator
+        SLog.log(LogCategory.PLAN, LogEvent.UPDATE, {}, "📝 残りステップなし: 新規プラン生成")
+        return await self._generate_new_plan(
+            goal, state_analysis, objective_progress, locator
         )
-        SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
-            "generated_steps": len(dialog_steps)
-        }, "🔒 ダイアログ処理ステップ生成完了")
-        return Plan(steps=dialog_steps)  # ダイアログ処理のみ（結合しない）
     
     def _create_state_analysis_for_dialog(self, screen_analysis) -> StateAnalysis:
         """ScreenAnalysisからStateAnalysisを生成するヘルパー（plan_step用）
