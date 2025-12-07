@@ -915,8 +915,11 @@ class SmartestiRoid:
         # Appium例外発生時のリトライ管理
         max_attempts = 2
         final_result = {"response": ""}  # 初期化
+        retry_needed = False
         
         for attempt in range(max_attempts):
+            retry_needed = False  # リセット
+            
             # カスタムknowhowを使用する場合、新しいセッションを作成
             async for graph in self.agent_session(self.no_reset, self.dont_stop_app_on_reset, effective_knowhow):
                 # state["input"]には純粋なタスクのみを渡す
@@ -980,8 +983,8 @@ Appium関連の例外を検出したため、セッションを再作成して�
 """
                         SLog.attach_text(retry_info, f"🔄 リトライ {attempt + 1}/{max_attempts}")
                         
-                        await asyncio.sleep(30)  # リトライ前に30秒待機
-                        break  # async for graphループを抜けてリトライ
+                        retry_needed = True
+                        break  # async for graphループを抜ける
                     else:
                         # Appium例外以外の場合、またはリトライ上限に達した場合は即座に失敗
                         SLog.error(LogCategory.TEST, LogEvent.FAIL, {
@@ -998,8 +1001,14 @@ Appium関連の例外を検出したため、セッションを再作成して�
                 finally:
                     SLog.info(LogCategory.TEST, LogEvent.END, {"agent": "plan_and_execute"}, "Plan-and-Execute Agent 終了")
             
-            # 正常に完了した場合はリトライループを抜ける
-            break
+            # async for graphループを抜けた後の処理
+            if retry_needed:
+                # リトライが必要な場合は、セッションクリーンアップを待ってから次のループへ
+                await asyncio.sleep(30)  # リトライ前に30秒待機
+                continue  # 次のループでagent_session()を再度呼び出す
+            else:
+                # 正常に完了した場合はリトライループを抜ける
+                break
 
         # validation
         result_text = final_result.get("response", None)
