@@ -360,6 +360,36 @@ TOTAL,,50,637902,627793,10109,405504,0.145639
 ```
 
 この仕組みにより、Allure レポートと併せて課金状況のサマリと詳細を簡単に追跡できます。
+
+### 📂 実行ログの自動保存
+
+テスト実行時に生成される詳細ログは `smartestiroid_logs/run_YYYYMMDD_HHMMSS/` ディレクトリに保存されます。  
+テスト完了後、このログディレクトリは自動的に `allure-results/` にコピーされ、Allure レポートと一緒に保管されます。
+
+保存されるログの内容:
+- `smartestiroid_session_YYYYMMDD_HHMMSS.jsonl` - 構造化ログ（JSON Lines形式）
+- `smartestiroid_session_YYYYMMDD_HHMMSS_analysis.txt` - 解析用テキストログ
+- `smartestiroid_session_YYYYMMDD_HHMMSS_images/` - スクリーンショット画像
+- `smartestiroid_session_YYYYMMDD_HHMMSS_prompts/` - LLMプロンプト履歴
+- `failure_report.md` - 失敗レポート（テスト失敗時のみ）
+
+ログの保存場所:
+```
+allure-results/
+├── run_20251207_143022/          # 自動コピーされたログディレクトリ
+│   ├── smartestiroid_session_20251207_143022.jsonl
+│   ├── smartestiroid_session_20251207_143022_analysis.txt
+│   ├── smartestiroid_session_20251207_143022_images/
+│   ├── smartestiroid_session_20251207_143022_prompts/
+│   └── failure_report.md
+├── environment.properties
+├── token-usage-20251207143022.csv
+└── ... (その他のAllure結果ファイル)
+```
+
+> **注意**: ログディレクトリのコピーはテスト終了時に自動実行されます。  
+> コピーに失敗した場合でも、元のログは `smartestiroid_logs/` ディレクトリに保持されます。
+
 ```
 
 コマンドラインで直接指定する場合:

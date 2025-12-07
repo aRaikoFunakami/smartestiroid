@@ -447,6 +447,9 @@ def pytest_sessionfinish(session, exitstatus):
     # ログ解析ファイルを自動生成（LLM解析用）
     _generate_log_analysis()
     
+    # run_XXXXディレクトリをAllureディレクトリにコピー
+    _copy_logs_to_allure(allure_results_dir)
+    
     # ログを閉じる
     SLog.close()
 
@@ -499,6 +502,47 @@ def _generate_log_analysis():
                 {"error": str(e)},
                 f"失敗レポートの生成に失敗: {e}"
             )
+
+
+def _copy_logs_to_allure(allure_results_dir: str):
+    """run_XXXXディレクトリをAllureディレクトリにコピーする"""
+    import shutil
+    from pathlib import Path
+    
+    log_file = SLog.get_log_file()
+    if not log_file or not log_file.exists():
+        return
+    
+    # run_XXXXディレクトリのパスを取得
+    run_dir = log_file.parent
+    if not run_dir.exists():
+        return
+    
+    try:
+        # Allureディレクトリ内にログディレクトリをコピー
+        allure_path = Path(allure_results_dir)
+        dest_dir = allure_path / run_dir.name
+        
+        # 既存のディレクトリがあれば削除
+        if dest_dir.exists():
+            shutil.rmtree(dest_dir)
+        
+        # ディレクトリ全体をコピー
+        shutil.copytree(run_dir, dest_dir)
+        
+        SLog.info(
+            LogCategory.SESSION,
+            LogEvent.COMPLETE,
+            {"source": str(run_dir), "dest": str(dest_dir)},
+            f"ログディレクトリをAllureにコピーしました: {run_dir.name} -> {allure_results_dir}"
+        )
+    except Exception as e:
+        SLog.warn(
+            LogCategory.SESSION,
+            LogEvent.FAIL,
+            {"error": str(e)},
+            f"ログディレクトリのコピーに失敗: {e}"
+        )
 
 
 async def evaluate_task_result(
