@@ -559,6 +559,13 @@ def create_workflow_functions(
 {ui_elements}"""
             
             try:
+                # LLMプロンプトをログ出力
+                SLog.log(LogCategory.LLM, LogEvent.START, {
+                    "method": "agent_executor",
+                    "model": cfg.execution_model,
+                    "prompt": task_formatted,
+                }, "LLMプロンプト送信: agent_executor", attach_to_allure=True)
+                
                 # マルチモーダルメッセージとして送信（画像付き）
                 with token_callback.track_query():
                     agent_response = await agent_executor.ainvoke(
@@ -571,14 +578,19 @@ def create_workflow_functions(
                         config={"callbacks": [tool_callback]}
                     )
                 
+                # LLMレスポンスをログ出力
+                response_content = agent_response['messages'][-1].content
+                SLog.log(LogCategory.LLM, LogEvent.COMPLETE, {
+                    "response": response_content[:500]
+                }, "エージェント応答完了")
+                SLog.attach_text(f"## 🤖 Agent Response\n\n{response_content}", "💡 LLM Response: Agent Executor")
+                
                 # ツール実行完了後、画面反映を待つ
                 # 3秒は経験則値、必要に応じて調整可能
                 import asyncio
                 await asyncio.sleep(3)
 
-                log_text = f"ステップ '{task}' のエージェント応答: {agent_response['messages'][-1].content}"
-                SLog.debug(LogCategory.STEP, LogEvent.RESPONSE, {"step": task, "response": agent_response['messages'][-1].content[:500]}, None)
-                SLog.attach_text(task, f"Step [model: {cfg.execution_model}]")
+                SLog.debug(LogCategory.STEP, LogEvent.RESPONSE, {"step": task, "response": response_content[:500]}, None)
 
                 # ツール呼び出し履歴を Allure に保存
                 tool_callback.save_to_allure(step_name=task)
@@ -826,30 +838,6 @@ def create_workflow_functions(
                         "replan_count": 0,
                     }
                 
-                # Step 2.5: 計画作成前に、目標が既に達成されているか評価
-                pre_eval = await planner.evaluate_objective_completion(
-                    current_objective, screen_analysis, ui_elements, image_url
-                )
-                
-                if pre_eval.achieved:
-                    # 目標は既に達成済み → 計画不要、次の目標へ
-                    SLog.info(LogCategory.OBJECTIVE, LogEvent.ACHIEVED, {"objective": current_objective.description[:50], "evidence": pre_eval.evidence}, f"目標「{current_objective.description[:50]}...」は既に達成済み")
-                    current_objective.status = "completed"
-                    current_objective.result = pre_eval
-                    
-                    # 次の目標へ進む
-                    if objective_progress.advance_to_next_objective():
-                        current_objective = objective_progress.get_current_step()
-                        current_objective.status = "in_progress"
-                        SLog.info(LogCategory.OBJECTIVE, LogEvent.START, {"objective": current_objective.description}, f"次の目標ステップへ: {current_objective.description}")
-                        # 次の目標に対して画面分析と計画作成
-                        screen_analysis = await planner.analyze_screen(ui_elements, image_url, current_objective.description)
-                    else:
-                        # 全目標達成
-                        SLog.info(LogCategory.OBJECTIVE, LogEvent.COMPLETE, {"all_achieved": True}, "全目標ステップ達成！")
-                        plan = Plan(steps=["全目標達成済み"])
-                        return {"plan": plan.steps, "replan_count": 0}
-                
                 # 現在の目標に対する実行計画を作成（全目標ステップを渡して境界を明確に）
                 plan = await planner.create_execution_plan_for_objective(
                     current_objective, screen_analysis, ui_elements, image_url,
@@ -1054,14 +1042,6 @@ def create_workflow_functions(
                         "replan_count": current_replan_count + 1,
                     }
                 else:
-                    # ステップを番号付きリストに整形し、reasoning も含める
-                    formatted_steps = "\n".join(f"{i+1}. {step}" for i, step in enumerate(replan_result.action.steps))
-                    if hasattr(replan_result.action, 'reasoning') and replan_result.action.reasoning:
-                        formatted_output = f"【計画の根拠】\n{replan_result.action.reasoning}\n\n【実行ステップ】\n{formatted_steps}"
-                    else:
-                        formatted_output = formatted_steps
-                        
-                    SLog.attach_text(formatted_output, f"🧠 Replan Steps [model: {cfg.planner_model}]")
                     elapsed = time.time() - start_time
                     SLog.attach_text(f"{elapsed:.3f} seconds", "⏱️ Replan Step Time")
                     

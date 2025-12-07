@@ -674,17 +674,12 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             activate_app = tools_dict.get("activate_app")
             terminate_app = tools_dict.get("terminate_app")
             
-            # appPackage情報をknowhowに追加（LLMがテスト対象アプリを認識できるようにする）
+            # app_package を取得
             app_package = capabilities.get("appium:appPackage")
-            if app_package:
-                app_package_info = f"""
-テスト対象アプリ情報:
-* テスト対象アプリのパッケージID: {app_package}
-* activate_app や terminate_app を使用する際は、このパッケージIDを使用してください
-* 別のアプリを起動する必要がある場合を除き、このアプリを操作してください
-"""
-                knowhow = app_package_info + "\n" + knowhow
-                SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"app_package": app_package}, f"テスト対象アプリ: {app_package} (knowhowに追加済み)")
+
+            # app_package がある場合のみ情報を作成、無ければ空文字
+            app_package_info = f"テスト対象アプリのパッケージID(appium:appPackage): {app_package}" if app_package else ""
+            SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"app_package": app_package}, f"テスト対象アプリ: {app_package}")
             
             # noReset=True の場合、appPackageで指定されたアプリを強制起動
             if no_reset:
@@ -746,10 +741,11 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
 * 例: {{'by': 'id', 'value': 'com.android.chrome:id/menu_button'}}
 * 例: {{'by': 'xpath', 'value': '//android.widget.Button[@content-desc="More options"]'}}
 
-【ドメイン固有ルール】
+
+{app_package_info}
+
+【ノウハウ集】
 {knowhow}
-
-
 """
 
             agent_executor = create_agent(llm, appium_tools(), system_prompt=prompt)
@@ -758,6 +754,7 @@ async def agent_session(no_reset: bool = True, dont_stop_app_on_reset: bool = Fa
             planner = SimplePlanner(
                 knowhow, 
                 model_name=cfg.planner_model,
+                app_package_info=app_package_info,
                 token_callback=token_callback
             )
 

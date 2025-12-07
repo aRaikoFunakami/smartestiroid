@@ -13,6 +13,7 @@ from ..models import Plan, Response, DecisionResult
 from ..progress import ObjectiveStep, ObjectiveProgress
 from ..config import RESULT_PASS, RESULT_FAIL
 from ..utils.structured_logger import SLog, LogCategory, LogEvent
+import smartestiroid.appium_tools as appium_tools
 
 
 class ObjectiveEvaluation(BaseModel):
@@ -187,8 +188,9 @@ class StateAnalysis(BaseModel):
 class MultiStageReplanner:
     """3段階に分けてreplanを実行するクラス（miniモデル用）"""
     
-    def __init__(self, llm, knowhow: str, token_callback=None):
+    def __init__(self, llm, app_package_info: str, knowhow: str, token_callback=None):
         self.llm = llm
+        self.app_package_info = app_package_info
         self.knowhow = knowhow
         self.model_name = llm.model_name if hasattr(llm, 'model_name') else "unknown"
         self.token_callback = token_callback  # track_query()用に保持
@@ -704,6 +706,11 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
         locator: str = ""
     ) -> Plan:
         """新規プランを生成（残りステップがない場合のみ呼ばれる）"""
+
+        # Appiumツール情報を取得
+        tools_info = appium_tools.appium_tools_for_prompt()
+        # 現在のアプリ
+        current_app_info = await appium_tools.get_current_app.ainvoke({}) if state_analysis else "不明"
         
         # ObjectiveProgressから進捗情報を取得
         objective_and_plan_info = ""
@@ -714,8 +721,12 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
             if current_step:
                 current_objective = current_step.description
         
+
+
         # StateAnalysisから状態要約を構築
         state_summary = f"""
+{self.app_package_info}
+{current_app_info}
 画面タイプ: {state_analysis.current_screen_type}
 画面変化: {state_analysis.screen_changes}
 主要要素: {state_analysis.main_elements}
@@ -742,26 +753,31 @@ steps: ダイアログを閉じるためのステップ（1〜2個のリスト�
 
 【現在の状態分析結果】
 {state_summary}
+
 {locator_section}
 
 【タスク】
 現在の目標ステップ「{current_objective or goal}」を達成するために必要なステップを生成してください。
 
 【ルール】
-1. 目標達成に必要な**最小限のステップ**のみを生成すること
-2. 各ステップは**1つのツール呼び出し**に対応すること
-3. 「すべて」「順番に」などの繰り返し目標の場合、**すべての対象要素**に対してステップを生成すること
-4. 各ステップは具体的で実行可能なこと（resource-id、テキスト、xpathなどを含む）
+- 目標達成に必要な**最小限のステップ**のみを生成すること
+- 「すべて」「順番に」などの繰り返し目標の場合、**すべての対象要素**に対してステップを生成すること
+- 各ステップは具体的で実行可能なこと
+- 再起動の場合は再起動ツールを使用すること
 
-【1ステップ=1操作の原則】
-- タップ操作: 1要素のタップ = 1ステップ
-- テキスト入力: send_keysで文字列全体を入力 = 1ステップ
-- スクロール: 1回のスクロール = 1ステップ
+【厳格ルール】
+- 目標の意味を変えない、拡大解釈しない
+- 「確認する」が目標なら確認のみ（操作は不要）
+- 「起動する」が目標で既に起動済みの場合でも必ずツールを使って起動する
+- ステップは具体的に、かつ簡潔に自然言語で記述し、ツール名や id や xpath を含めてはならない
+- 目標と関係ないステップを追加しない
+- 勝手にステップを追加しない
 
-【禁止事項】
-- アカウント作成
-- 自動ログイン
-- 目標と関係ない操作
+【ノウハウ集】
+{self.knowhow}
+
+【利用可能なツール】
+{tools_info}
 
 出力形式: 厳密なJSON形式
 """

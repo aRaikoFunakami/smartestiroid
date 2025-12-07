@@ -20,10 +20,12 @@ from ..config import (
 from .multi_stage_replanner import MultiStageReplanner
 from ..utils.allure_logger import log_openai_error_to_allure
 from ..utils.structured_logger import SLog, LogCategory, LogEvent
+import smartestiroid.appium_tools as appium_tools
 
 
 class ScreenAnalysis(BaseModel):
     """画面分析結果のモデル"""
+    app_package: Optional[str] = Field(default=None, description="アプリのパッケージ名")
     screen_type: str = Field(description="画面の種類（例：ホーム画面、設定画面、ダイアログ表示中など）")
     main_elements: str = Field(description="画面上の主要なUI要素の説明")
     blocking_dialogs: Optional[str] = Field(default=None, description="目標達成を妨げるダイアログやオーバーレイがある場合、その内容と閉じ方")
@@ -33,6 +35,7 @@ class ScreenAnalysis(BaseModel):
     def to_log_dict(self) -> dict:
         """ログ出力用の辞書を返す"""
         return {
+            "app_package": self.app_package,
             "screen_type": self.screen_type,
             "main_elements": self.main_elements,
             "blocking_dialogs": self.blocking_dialogs,
@@ -43,7 +46,8 @@ class ScreenAnalysis(BaseModel):
     def to_allure_text(self) -> str:
         """Allure表示用の整形されたテキストを返す"""
         lines = [
-            f"## 📱 画面分析結果",
+            "## 📱 画面分析結果",
+            f"**アプリのパッケージ名:** {self.app_package}",
             f"**画面タイプ:** {self.screen_type}",
             "",
             "### 現在の状態",
@@ -71,7 +75,7 @@ class ScreenAnalysis(BaseModel):
 class SimplePlanner:
     """テスト用のシンプルなプランナー（Multi-stage replanモード）"""
 
-    def __init__(self, knowhow: str = KNOWHOW_INFO, model_name: str = MODEL_STANDARD, token_callback=None):
+    def __init__(self, knowhow: str = KNOWHOW_INFO, model_name: str = MODEL_STANDARD, app_package_info: str = "", token_callback=None):
         callbacks = [token_callback] if token_callback else []
         self.llm = ChatOpenAI(
             model=model_name,
@@ -83,9 +87,10 @@ class SimplePlanner:
         self.knowhow = knowhow  # ノウハウ情報を保持
         self.model_name = model_name
         self.token_callback = token_callback  # track_query()用に保持
+        self.app_package_info = app_package_info # アプリ情報を保持
         
         # Multi-stage用のreplanner初期化（token_callbackを渡す）
-        self.replanner = MultiStageReplanner(self.llm, knowhow, token_callback)
+        self.replanner = MultiStageReplanner(self.llm, self.app_package_info,knowhow, token_callback)
         SLog.log(LogCategory.CONFIG, LogEvent.START, {
             "model": model_name
         }, "🔀 Multi-stage replan モード有効")
@@ -103,10 +108,18 @@ class SimplePlanner:
         Returns:
             ScreenAnalysis: 画面分析結果
         """
+
+        # appium_tools_for_prompt()は通常の関数（awaitは不要）
+        tools_info = appium_tools.appium_tools_for_prompt()
+        
+        # 現在のアプリ情報を取得（LangChainツールとして呼び出し）
+        current_app_info = await appium_tools.get_current_app.ainvoke({})
+
         system_prompt = """あなたは画面分析のエキスパートです。
 提供された画像とロケーター情報から、現在の画面状態を正確に分析してください。
 
 【分析の観点】
+0. アプリの種類: どのアプリか（例：Chrome、設定、カメラなど）
 1. 画面の種類: 何の画面か（ホーム、設定、検索結果、ダイアログなど）
 2. 主要なUI要素: ボタン、入力欄、リスト、アイコンなど
 3. 障害物の有無: 目標達成を妨げるダイアログやオーバーレイ
@@ -116,7 +129,7 @@ class SimplePlanner:
    - Cookie同意バナー
    - その他のオーバーレイ
 4. 現在の状態: 目標に向けてどの段階にいるか
-5. 実行可能なアクション: この画面で何ができるか
+5. 実行可能なアクション: 目標に向けてこの画面で何ができるか
 
 【重要】
 - 画像とロケーター情報の両方を突き合わせて分析すること
@@ -125,7 +138,15 @@ class SimplePlanner:
 
         goal_context = f"\n\n【参考】目標: {goal}" if goal else ""
         
-        human_message = f"""この画面を分析してください。{goal_context}
+        human_message = f"""この画面を分析してください。
+{goal_context}
+
+{self.app_package_info}
+
+{current_app_info}
+
+【利用可能なツール一覧】
+{tools_info}
 
 【ロケーター情報】
 {locator}
@@ -325,7 +346,10 @@ class SimplePlanner:
 【目標】
 {objective_step.description}
 
+{self.app_package_info}
+
 【画面状態】
+{screen_analysis.app_package}
 {screen_analysis.screen_type} 
 
 【現在の画面状態の要約】
@@ -334,8 +358,16 @@ class SimplePlanner:
 【厳格ルール】
 - 目標の意味を変えない、拡大解釈しない
 - 「確認する」が目標なら確認のみ（操作は不要）
-- 「起動する」が目標で既に起動済みの場合でも必ず app_activate を使って起動する
+- 「起動する」が目標で既に起動済みの場合でも必ずツールを使って起動する
 - 勝手にアクションを追加しない
+- ステップは具体的に、かつ簡潔に自然言語で記述し、ツール名や id や xpath を含めてはならない
+
+【ノウハウ集】
+{self.knowhow}
+- 再起動の場合は再起動ツールを使用すること
+
+【利用可能なツール一覧】
+{appium_tools.appium_tools_for_prompt()}
 """
 
         messages = [HumanMessage(content=prompt)]

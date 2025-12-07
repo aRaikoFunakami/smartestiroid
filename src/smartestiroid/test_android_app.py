@@ -79,14 +79,14 @@ def create_test_function(case, test_num):
         steps = str(case.get("Step", "")).strip() 
         
         # Reset列の値を取得してno_reset値を決定
-        # "Reset"の場合はno_reset=False（リセットあり）、"noReset"の場合はno_reset=True（リセットなし）
+        # "reset"または"true"の場合はno_reset=False（リセットあり）、それ以外はno_reset=True（リセットなし）
         reset_value = str(case.get("Reset", "")).strip()
-        no_reset = reset_value.lower() != 'reset'
+        no_reset = reset_value.lower() not in ['reset', 'true']
 
         # Get dontStopAppOnReset value
-        # "dontStop"の場合はTrue、それ以外はFalse
+        # "dontstop"または"true"の場合はTrue、それ以外はFalse
         dont_stop_app_on_reset_value = str(case.get("dontStopAppOnReset", "")).strip()
-        dont_stop_app_on_reset = dont_stop_app_on_reset_value.lower() == 'dontstop'
+        dont_stop_app_on_reset = dont_stop_app_on_reset_value.lower() in ['dontstop', 'true']
 
 
         # Execute steps via your agent
