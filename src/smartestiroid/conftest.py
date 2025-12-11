@@ -45,6 +45,105 @@ PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 capabilities_path = os.path.join(os.getcwd(), "capabilities.json")
 
 
+def _get_git_info() -> dict:
+    """smartestiroid の Git 情報を取得
+    
+    Returns:
+        dict: Git バージョンと未コミット変更の情報
+    """
+    info = {
+        "version": "unknown",
+        "uncommitted_changes": [],
+        "has_changes": False
+    }
+    
+    try:
+        import subprocess
+        
+        # パッケージディレクトリを基準にgitリポジトリのルートを取得
+        git_root = os.path.dirname(os.path.dirname(PACKAGE_DIR))
+        
+        # git describe でバージョン取得
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            info["version"] = result.stdout.strip()
+        
+        # git status --short で未コミット変更を取得
+        result = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            status_output = result.stdout.strip()
+            if status_output:
+                info["uncommitted_changes"] = status_output.split("\n")
+                info["has_changes"] = True
+                
+    except Exception as e:
+        # エラーは無視（Git情報が取得できなくてもテストは実行可能）
+        pass
+    
+    return info
+
+
+def _create_executor_json(config):
+    """Allure executor.json を生成
+    
+    Args:
+        config: pytest config オブジェクト
+    """
+    try:
+        # alluredir オプションが指定されているか確認
+        allure_dir = config.getoption("--alluredir", default=None)
+        if not allure_dir:
+            return  # allureを使用していない場合はスキップ
+        
+        # ディレクトリが存在しない場合は作成
+        os.makedirs(allure_dir, exist_ok=True)
+        
+        # Git情報を取得
+        git_info = _get_git_info()
+        
+        # executor.json の内容を構築
+        executor_data = {
+            "name": "SmarTestiRoid",
+            "type": "pytest",
+            "buildName": f"smartestiroid {git_info['version']}",
+        }
+        
+        # 未コミット変更がある場合は buildUrl に表示
+        if git_info["has_changes"]:
+            changes = git_info['uncommitted_changes']
+            if len(changes) <= 3:
+                executor_data["buildUrl"] = f"Uncommitted: {', '.join(changes)}"
+            else:
+                executor_data["buildUrl"] = f"Uncommitted: {', '.join(changes[:3])}... ({len(changes)} files)"
+        
+        # executor.json を書き込み
+        executor_file = os.path.join(allure_dir, "executor.json")
+        with open(executor_file, "w", encoding="utf-8") as f:
+            json.dump(executor_data, f, indent=2, ensure_ascii=False)
+        
+        SLog.info(LogCategory.CONFIG, LogEvent.COMPLETE, 
+                 {"file": executor_file, "version": git_info['version']}, 
+                 "executor.json を作成しました")
+        
+    except Exception as e:
+        # エラーは警告のみ（テスト実行には影響しない）
+        SLog.warn(LogCategory.CONFIG, LogEvent.FAIL, 
+                 {"error": str(e)}, 
+                 "executor.json の作成に失敗しました")
+
+
 # Pytest hooks for command-line options
 def pytest_addoption(parser):
     """pytest コマンドラインオプションを追加"""
@@ -136,6 +235,7 @@ def pytest_configure(config):
     """pytest設定時にグローバル変数を設定"""
     global capabilities_path
     import sys
+    import subprocess
     
     # --mini-model オプションが指定された場合、環境変数を設定
     if config.getoption("--mini-model"):
@@ -157,6 +257,9 @@ def pytest_configure(config):
     if not os.path.isabs(cap_path):
         cap_path = os.path.join(os.getcwd(), cap_path)
     capabilities_path = cap_path
+    
+    # executor.json を生成（Allure レポート用）
+    _create_executor_json(config)
 
 
 def _parse_test_range(range_str: str) -> set:
