@@ -409,6 +409,9 @@ Executorの自己評価が正しいかを、実行後の画面状態と突き合
     if screenshot_url_after:
         content_blocks.append({"type": "image_url", "image_url": {"url": screenshot_url_after}})
     
+    # Excecutor 実行後のスクリーンショットをAllureに添付
+    SLog.attach_screenshot(screenshot_url_after, label="Screenshot After")
+
     # LLMプロンプトをログ出力
     SLog.log(LogCategory.LLM, LogEvent.START, {
         "method": "verify_step_execution",
