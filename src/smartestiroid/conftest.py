@@ -245,7 +245,7 @@ def pytest_configure(config):
         cfg.planner_model = cfg.MODEL_MINI
         cfg.execution_model = cfg.MODEL_MINI
         cfg.evaluation_model = cfg.MODEL_EVALUATION_MINI
-        # verify_screen_content のモデルも更新
+        # analyze_screen_content のモデルも更新
         set_verify_model(cfg.MODEL_MINI)
         SLog.info(LogCategory.CONFIG, LogEvent.UPDATE, {"mode": "mini"}, "Miniモデルモードで実行します")
     

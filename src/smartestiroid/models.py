@@ -141,7 +141,7 @@ class StepExecutionResult(BaseModel):
     reason: str = Field(description="成功/失敗の判断理由（100〜300文字程度）。何を試みて何が起きたかを具体的に記述")
     executed_action: str = Field(description="実際に実行した操作の説明（例：'resource-id com.app:id/button をタップした'）")
     expected_screen_change: Optional[str] = Field(default=None, description="操作後に期待される画面変化の説明（例：'ホーム画面に遷移する'、'ダイアログが表示される'）。Executorは実行後の画面を確認できないため、期待値として記述する")
-    no_page_source_change: bool = Field(default=False, description="page_sourceに影響を与えないツールのみを実行した場合はTrue。例：find_element, verify_screen_content, get_page_source, screenshot等の確認・取得系ツール")
+    no_page_source_change: bool = Field(default=False, description="page_sourceに影響を与えないツールのみを実行した場合はTrue。例：find_element, analyze_screen_content, get_page_source, screenshot等の確認・取得系ツール")
     
     def to_allure_text(self) -> str:
         """Allure表示用の整形されたテキストを返す"""

@@ -392,16 +392,16 @@ def scroll_to_element(by: str, value: str, scrollable_by: str = "xpath", scrolla
     return f"❌ Element not found after scrolling: No element found with by='{by}' and value='{value}' after {scroll_count} scrolls (total scroll distance: {total_scroll_distance}px). IMPORTANT: Use get_page_source() to verify the element exists and check its exact identifiers."
 
 
-class VerifyScreenContentInput(BaseModel):
-    """Input schema for verify_screen_content."""
-    target: str = Field(description="The target content to verify is displayed on the screen (e.g., '利用規約ダイアログ', 'ログインボタン', 'エラーメッセージ')")
+class AnalyzeScreenContentInput(BaseModel):
+    """Input schema for analyze_screen_content."""
+    query: str = Field(description="Natural language query about the screen content (e.g., '利用規約ダイアログが表示されていること', '利用規約ダイアログが表示されていないこと', 'ホームボタンは有効か', '画面のタイトルは何か')")
 
 
-class VerifyScreenContentResult(BaseModel):
-    """Output schema for verify_screen_content LLM response."""
-    result: str = Field(description="FOUND if target is displayed, NOT_FOUND otherwise")
-    reason: str = Field(description="1-2 sentence explanation of why the target was found or not found")
-    detail: Optional[str] = Field(default=None, description="XML element or text that matches the target, or null if not found")
+class AnalyzeScreenContentResult(BaseModel):
+    """Output schema for analyze_screen_content LLM response."""
+    answer: str = Field(description="Direct answer to the query (e.g., 'はい', 'いいえ', '表示されています', '表示されていません', 'ホームへようこそ')")
+    confidence: str = Field(description="Confidence level: HIGH (clear evidence), MEDIUM (some inference), LOW (insufficient information)")
+    reason: str = Field(description="1-2 sentence explanation with evidence from XML or screenshot")
 
 
 # グローバル変数でモデル名を保持（外部から設定可能）
@@ -409,33 +409,37 @@ _verify_model_name: str = "gpt-4.1-mini"
 
 
 def set_verify_model(model_name: str) -> None:
-    """Set the model name used for verify_screen_content.
+    """Set the model name used for analyze_screen_content.
     
     Args:
         model_name: The model name to use (e.g., "gpt-4.1-mini", "gpt-4o")
     """
     global _verify_model_name
     _verify_model_name = model_name
-    logger.info(f"🔧 Verify model set to: {model_name}")
+    logger.info(f"🔧 Screen analysis model set to: {model_name}")
 
 
 def get_verify_model() -> str:
-    """Get the current model name used for verify_screen_content."""
+    """Get the current model name used for analyze_screen_content."""
     return _verify_model_name
 
 
-@tool("verify_screen_content", args_schema=VerifyScreenContentInput)
-def verify_screen_content(target: str) -> str:
-    """Verify that the specified content is displayed on the current screen.
+@tool("analyze_screen_content", args_schema=AnalyzeScreenContentInput)
+def analyze_screen_content(query: str) -> str:
+    """Analyze screen content using LLM with XML and screenshot to answer any query.
     
-    Uses LLM with both XML page source and screenshot to verify.
-    Use this for confirmation steps like "利用規約ダイアログを確認する" or "エラーメッセージが表示されていることを確認する".
+    This is a general-purpose screen analysis tool that can answer various types of questions:
+    - Existence verification: "利用規約ダイアログが表示されていること"
+    - Non-existence verification: "利用規約ダイアログが表示されていないこと"  
+    - State queries: "ログインボタンは有効か", "ホームタブは選択されているか"
+    - Content queries: "画面のタイトルは何か", "表示されているエラーメッセージの内容は"
+    - Any other screen-related questions
     
     Args:
-        target: The target content to verify (e.g., "利用規約ダイアログ", "ログインボタン")
+        query: Natural language question about the current screen
         
     Returns:
-        A string indicating whether the target was found and evidence.
+        Answer with confidence level and supporting evidence
     """
     from .session import driver
     
@@ -448,29 +452,46 @@ def verify_screen_content(target: str) -> str:
         image_url = take_screenshot.invoke({"as_data_url": True})
         ui_elements = get_page_source.invoke({})
         
-        # Call LLM to verify with structured output
+        # Call LLM to analyze with structured output
         base_model = ChatOpenAI(model=_verify_model_name, temperature=0)
-        structured_model = base_model.with_structured_output(VerifyScreenContentResult)
+        structured_model = base_model.with_structured_output(AnalyzeScreenContentResult)
         
-        prompt = f"""あなたは画面確認アシスタントです。提供されたXMLソースとスクリーンショットを分析し、指定されたコンテンツが画面に表示されているかを確認してください。
+        prompt = f"""あなたは画面分析アシスタントです。XMLソースとスクリーンショットを使って、ユーザーの質問に正確に答えてください。
 
-【確認対象】
-{target}
+【質問】
+{query}
 
 【XML Page Source】
 ```xml
 {ui_elements}
 ```
 
-【判定基準】
-1. XMLに確認対象に関連するテキストや要素が含まれているか
-2. スクリーンショットに確認対象が視覚的に表示されているか
-3. ダイアログの場合は、ダイアログの枠やオーバーレイがあるか
+【回答ルール】
+1. 質問の意図を正確に理解してください
+   - 存在確認: "〜が表示されている" "〜が存在する" → はい/いいえ で回答
+   - 非存在確認: "〜が表示されていない" "〜が存在しない" → はい（存在しない）/いいえ（存在する） で回答
+   - 状態確認: "〜は有効か" "〜は選択されているか" → 有効/無効、選択されている/いない で回答
+   - 内容確認: "〜は何か" "〜の内容は" → 具体的な内容を回答
 
-【回答】
-- result: "FOUND" (確認対象が表示されている) または "NOT_FOUND" (表示されていない)
-- reason: 確認対象が見つかった/見つからなかった根拠を1-2文で説明
-- detail: 見つかった場合はXMLのどの要素やテキストが該当するかを記載。見つからなかった場合はnull"""
+2. XMLとスクリーンショットの両方を参照してください
+   - XMLの要素、属性、テキストを確認
+   - スクリーンショットで視覚的な表示を確認
+   - 両者が一致しているか検証
+
+3. 確信度を正直に評価してください
+   - HIGH: XMLとスクリーンショットの両方に明確な証拠がある
+   - MEDIUM: ある程度の推測が含まれる、または一方の情報のみで判断
+   - LOW: 情報が不足している、または判断が困難
+
+4. 回答は簡潔かつ直接的に
+   - answer: 質問への端的な回答（1-2文）
+   - reason: XMLの具体的な要素やスクリーンショットの内容を引用して根拠を示す
+
+【出力形式】
+厳格なJSON形式で以下を出力:
+- answer: 質問への直接的な回答
+- confidence: HIGH/MEDIUM/LOW
+- reason: 根拠の説明（XMLやスクリーンショットから引用）"""
 
         messages = [
             HumanMessage(
@@ -488,19 +509,24 @@ def verify_screen_content(target: str) -> str:
         ]
         
         # with_structured_output で厳密にパース
-        result_data: VerifyScreenContentResult = structured_model.invoke(messages)
+        result_data: AnalyzeScreenContentResult = structured_model.invoke(messages)
         
-        # テキスト形式に変換
-        if result_data.result == "FOUND":
-            logger.info(f"✅ verify_screen_content: '{target}' was FOUND on screen")
-            detail_text = f"\n[詳細]: {result_data.detail}" if result_data.detail else ""
-            return f"✅ 確認成功: '{target}' が画面に表示されています。\n\n[結果]: FOUND\n[根拠]: {result_data.reason}{detail_text}"
-        else:
-            logger.warning(f"❌ verify_screen_content: '{target}' was NOT_FOUND on screen")
-            return f"❌ 確認失敗: '{target}' が画面に見つかりませんでした。\n\n[結果]: NOT_FOUND\n[根拠]: {result_data.reason}"
+        # ログ出力
+        logger.info(f"📊 analyze_screen_content: query='{query[:50]}...', answer='{result_data.answer}', confidence={result_data.confidence}")
+        
+        # テキスト形式で返却（中立的な表現）
+        return f"""📊 画面分析結果
+
+【質問】{query}
+
+【回答】{result_data.answer}
+
+【確信度】{result_data.confidence}
+
+【根拠】{result_data.reason}"""
             
     except InvalidSessionIdException:
         raise
     except Exception as e:
-        logger.error(f"❌ verify_screen_content failed: {e}")
-        return f"❌ 確認中にエラーが発生しました: {str(e)}"
+        logger.error(f"❌ analyze_screen_content failed: {e}")
+        return f"❌ 画面分析中にエラーが発生しました: {str(e)}"
