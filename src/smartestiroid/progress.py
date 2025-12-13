@@ -78,6 +78,22 @@ class ExecutionProgress(BaseModel):
         """Get the total number of tool calls across all steps."""
         return sum(len(r.tool_calls) for r in self.step_records)
     
+    def update_plan_after_replan(self, new_remaining_steps: List[str]) -> None:
+        """リプラン後に計画を更新する
+        
+        リプランで新しい残りステップが生成された場合、
+        original_planを「完了済みステップ + 新しい残りステップ」に更新する。
+        これにより進捗表示が正確になる。
+        
+        Args:
+            new_remaining_steps: リプラン後の新しい残りステップリスト
+        """
+        # 完了済みステップのテキストを取得
+        completed_steps = [r.step_text for r in self.step_records if r.status == "completed"]
+        
+        # 新しいoriginal_planを構築
+        self.original_plan = completed_steps + new_remaining_steps
+    
     def get_progress_summary(self) -> str:
         """Generate a human-readable progress summary."""
         completed = self.get_completed_count()
@@ -106,6 +122,13 @@ class ExecutionProgress(BaseModel):
             for tc in record.tool_calls:
                 tc_status = "✓" if tc.error is None else "✗"
                 summary_lines.append(f"    [{tc_status}] {tc.tool_name}")
+        
+        # 残りのステップを表示
+        if completed < total:
+            summary_lines.append("")
+            summary_lines.append("【残りのステップ】")
+            for i in range(completed, total):
+                summary_lines.append(f"⏳ ステップ{i + 1}: {self.original_plan[i][:50]}...")
         
         return "\n".join(summary_lines)
 

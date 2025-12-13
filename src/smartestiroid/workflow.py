@@ -1153,10 +1153,10 @@ def create_workflow_functions(
                     # 注意: リプランは残りステップの再計画なので、完了済みステップは保持
                     new_plan = replan_result.action.steps
                     if execution_progress["progress"]:
-                        # 完了済みステップ数を保持しつつ、新しい計画を設定
+                        # 完了済みステップを含めた新しい計画に更新
+                        execution_progress["progress"].update_plan_after_replan(new_plan)
+                        # current_step_indexは完了済み数に調整
                         completed_count = execution_progress["progress"].get_completed_count()
-                        # 新しい計画は「残りのステップ」なので、original_planは更新しない
-                        # current_step_indexを調整
                         execution_progress["progress"].current_step_index = completed_count
                     
                     # ObjectiveProgressにも新しい実行計画を設定
