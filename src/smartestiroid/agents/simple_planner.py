@@ -806,7 +806,8 @@ class SimplePlanner:
                     past_steps=state["past_steps"],
                     state_analysis=state_analysis,
                     objective_progress=objective_progress,
-                    locator=locator  # ブロッキングダイアログ処理用にロケーター情報を渡す
+                    locator=locator,  # ブロッキングダイアログ処理用にロケーター情報を渡す
+                    step_history=step_history  # 実行ステップ失敗時のリプラン用
                 )
                 SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
                     "step_count": len(plan.steps)
