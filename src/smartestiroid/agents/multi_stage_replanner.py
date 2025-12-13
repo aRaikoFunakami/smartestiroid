@@ -194,6 +194,28 @@ class MultiStageReplanner:
         self.knowhow = knowhow
         self.model_name = llm.model_name if hasattr(llm, 'model_name') else "unknown"
         self.token_callback = token_callback  # track_query()用に保持
+    
+    def _format_step_history(self, step_history: list) -> str:
+        """ステップ履歴を整形してLLMプロンプト用の文字列として返す"""
+        if not step_history:
+            return "(実行済みステップなし)"
+        
+        formatted = []
+        for i, entry in enumerate(step_history[-3:], 1):  # 最新3件のみ
+            step = entry.get("step", "不明")
+            success = entry.get("success", False)
+            evaluation = entry.get("evaluation", {})
+            
+            status = "✅ 成功" if success else "❌ 失敗"
+            executor_reason = evaluation.get("executor_reason", "").strip()[:200]
+            
+            formatted.append(f"""
+ステップ {i}: {step}
+状態: {status}
+評価理由: {executor_reason}
+""")
+        
+        return "\n".join(formatted)
 
     async def analyze_state(
         self,
@@ -203,7 +225,8 @@ class MultiStageReplanner:
         locator: str,
         previous_image_url: str,
         current_image_url: str,
-        objective_progress: ObjectiveProgress
+        objective_progress: ObjectiveProgress,
+        step_history: list = None
     ) -> StateAnalysis:
         """ステージ1: 画像（前回/現在）とロケーターから現状を把握
 
@@ -273,9 +296,15 @@ class MultiStageReplanner:
 
 {progress_info}
 
+【実行済みステップの詳細情報】★超重要★
+以下は各ステップの実行結果と評価内容です。条件分岐ステップの評価に特に注目してください。
+{self._format_step_history(step_history)}
+
 【重要】評価基準について
 - 「目標と実行プランの全体進捗」を確認し、実行プランが全て✅なら目標達成と判断すること
 - 現在評価中の目標ステップ「{current_objective or goal}」が達成されているかを特に評価すること
+- 【実行済みステップの詳細情報】から条件不成立（success=False）の理由を確認し、
+  テスト合否判定基準に照らして妥当かを判断すること
 
 【★超重要★ スキップ不可の原則】
 - 「すべてのタブをタップする」等の目標において、初期状態で選択済みの要素があっても「達成済み」とみなしてはいけない

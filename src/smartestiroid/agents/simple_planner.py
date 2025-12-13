@@ -597,6 +597,7 @@ class SimplePlanner:
         image_url: str,
         previous_image_url: str,
         objective_progress: ObjectiveProgress,
+        step_history: list = None,
     ) -> Act:
         """実行結果を評価して計画を再調整する
         
@@ -634,7 +635,8 @@ class SimplePlanner:
                     locator=locator,
                     previous_image_url=previous_image_url,
                     current_image_url=image_url,
-                    objective_progress=objective_progress
+                    objective_progress=objective_progress,
+                    step_history=step_history or []
                 )
                 
                 # 画面不整合チェック

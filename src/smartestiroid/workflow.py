@@ -1056,10 +1056,11 @@ def create_workflow_functions(
                 # 現在画像を添付
                 SLog.attach_screenshot(image_url, label="Current Screenshot (After Action)")
 
-                # 前回画像と現在画像を使ってリプラン
+                # 前回画像と現在画像を使ってリプラン（step_historyも渡す）
                 replan_result = await planner.replan(
                     state, ui_elements, image_url, previous_image_url,
-                    objective_progress=objective_progress_cache.get("progress")
+                    objective_progress=objective_progress_cache.get("progress"),
+                    step_history=step_history["executed_steps"]
                 )
 
                 # 現在画像を次回用にキャッシュに保存
