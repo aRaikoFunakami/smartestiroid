@@ -61,6 +61,12 @@ class StateAnalysis(BaseModel):
     current_objective_achieved: bool = Field(description="現在の目標ステップが達成されているかどうか")
     current_objective_evidence: str = Field(description="現在の目標ステップの達成/未達成の根拠（ロケーター情報や画面状態に基づく）")
     
+    # 残りステップの処理方針（残りステップがある場合のみ設定）
+    remaining_steps_action: Optional[str] = Field(
+        default=None,
+        description="残りの実行ステップをどう処理すべきか: 'EXECUTE'(そのまま実行) / 'DISCARD'(破棄して確認操作) / 'REPLAN'(修正が必要)"
+    )
+    
     # 提案（任意）
     suggested_next_action: Optional[str] = Field(default=None, description="次に実行すべきアクションの提案（任意）")
     
@@ -430,7 +436,16 @@ class MultiStageReplanner:
    例: 「利用規約ダイアログ、閉じるボタン: com.example.app:id/terms_agree」
 6. 現在の目標ステップが達成されているかどうか
 7. 現在の目標ステップの達成/未達成の根拠
-8. 次に実行すべきアクションの提案（任意）
+8. 【★重要★ 残りステップの処理方針】（残りステップがある場合のみ）
+   - 実行プランの進捗を確認（✅完了、▶️現在、⏳未実行）
+   - これまで実行したステップで目標が達成されているか判断
+   - 残りステップが本当に必要か評価
+   - remaining_steps_action を設定:
+     * "EXECUTE": 残りステップをそのまま実行すべき（目標未達成）
+     * "DISCARD": 残りステップは不要（目標達成済み、重複操作になる）
+     * "REPLAN": 残りステップが不適切（画面状態と合わない、修正が必要）
+   - 残りステップがない場合は remaining_steps_action = null
+9. 次に実行すべきアクションの提案（任意）
 
 【ブロッキング要素の判定基準】（★重要★）
 以下に該当する画面は「目標達成を妨げるダイアログやオーバーレイ」として報告すること:
@@ -538,6 +553,7 @@ class MultiStageReplanner:
 現在の目標ステップ達成: {"Yes" if state_analysis.current_objective_achieved else "No"}
 現在の目標ステップ根拠: {state_analysis.current_objective_evidence}
 全ての目標ステップ達成: {"Yes" if all_objectives_completed else "No"}
+残りステップ処理方針: {state_analysis.remaining_steps_action or "N/A"}
 """
 
         prompt = f"""あなたは次のアクションを厳密に判断するエキスパートです。
@@ -603,11 +619,18 @@ class MultiStageReplanner:
    - reason例: 「テスト合否判定基準では初期起動時にダイアログが表示されるべきだが、
                 条件『ダイアログが表示されている』が不成立。アプリ不具合の可能性。」
 
+★超重要★ 残りステップ処理方針の考慮:
+3. 残りステップ処理方針が "DISCARD" の場合:
+   - これは「残りステップは不要、目標達成済み」を意味する
+   - 現在の目標が最後の目標なら → decision=RESPONSE（テスト成功）
+   - まだ次の目標がある場合 → decision=PLAN（次の目標へ進む）
+   - ★重要★: DISCARD = 目標達成済みなので、実行プラン進捗（✅/⏳）を見る必要はない
+
 通常の判断:
-3. 現在の目標ステップが未達成（⚠️を除く）→ decision=PLAN
-4. 現在の目標ステップが達成済みで、かつ「現在の目標が最後の目標: Yes」の場合 → decision=RESPONSE（テスト成功として報告）
-5. 現在の目標ステップが達成済みで、まだ次の目標ステップがある場合 → decision=PLAN
-6. 全ての目標ステップが達成済み → decision=RESPONSE（テスト成功として報告）
+4. 現在の目標ステップが未達成（⚠️を除く）→ decision=PLAN
+5. 現在の目標ステップが達成済みで、かつ「現在の目標が最後の目標: Yes」の場合 → decision=RESPONSE（テスト成功として報告）
+6. 現在の目標ステップが達成済みで、まだ次の目標ステップがある場合 → decision=PLAN
+7. 全ての目標ステップが達成済み → decision=RESPONSE（テスト成功として報告）
 
 【出力仕様】
 厳格なJSON
@@ -740,18 +763,47 @@ class MultiStageReplanner:
                 )
         
         # ケース2: ブロッキングダイアログがなく、残りステップがある場合
-        # → LLMを呼ばずに残りステップをそのまま返す
+        # → analyze_stateで判断された処理方針に従う
         if remaining_count > 0:
-            if dialog_mode:
-                # ダイアログ処理が完了し、通常処理に復帰
-                SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
-                    "remaining_steps": remaining_count
-                }, "🔓 ダイアログ処理完了 → 通常処理に復帰")
-            else:
+            # analyze_stateで判断された処理方針を取得
+            action = state_analysis.remaining_steps_action or "EXECUTE"  # デフォルトはEXECUTE
+            
+            if action == "EXECUTE":
+                # 残りステップをそのまま実行
+                if dialog_mode:
+                    SLog.log(LogCategory.DIALOG, LogEvent.COMPLETE, {
+                        "remaining_steps": remaining_count
+                    }, "🔓 ダイアログ処理完了 → 通常処理に復帰")
+                else:
+                    SLog.log(LogCategory.PLAN, LogEvent.UPDATE, {
+                        "remaining_steps": remaining_count
+                    }, "📋 残りステップを継続実行")
+                return Plan(steps=remaining)
+            
+            elif action == "DISCARD":
+                # 残りステップを破棄（目標達成済み）
                 SLog.log(LogCategory.PLAN, LogEvent.UPDATE, {
-                    "remaining_steps": remaining_count
-                }, "📋 通常継続")
-            return Plan(steps=remaining)
+                    "discarded_steps": remaining[:3],
+                    "reason": "目標達成済み、残りステップは不要"
+                }, "⏭️ 残りステップを破棄: 確認操作に置き換え")
+                replacement_steps = ["現在の画面が正しく表示されていることを確認する"]
+                return Plan(steps=replacement_steps)
+            
+            elif action == "REPLAN":
+                # 残りステップを修正（リプラン）
+                SLog.log(LogCategory.PLAN, LogEvent.UPDATE, {
+                    "reason": "残りステップが不適切、リプランが必要"
+                }, "🔄 残りステップをリプラン")
+                return await self._generate_new_plan(
+                    goal, state_analysis, objective_progress, locator
+                )
+            
+            else:
+                # フォールバック: そのまま実行
+                SLog.warn(LogCategory.PLAN, LogEvent.RETRY, {
+                    "unexpected_action": action
+                }, "⚠️ 予期しないアクション、残りステップをそのまま実行")
+                return Plan(steps=remaining)
         
         # ケース3: ブロッキングダイアログもなく、残りステップもない場合
         # → 目標達成済みまたは次の目標へ進む必要がある（新規プラン生成が必要）
