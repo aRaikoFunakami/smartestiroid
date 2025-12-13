@@ -1016,7 +1016,7 @@ class SmartestiRoid:
         effective_knowhow = knowhow if knowhow is not None else self.knowhow
 
         # Appium例外発生時のリトライ管理
-        max_attempts = 2
+        max_attempts = 3
         final_result = {"response": ""}  # 初期化
         retry_needed = False
         
