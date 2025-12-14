@@ -728,14 +728,25 @@ class SimplePlanner:
                 "state_summary": state_summary
             }, "状態分析結果")
             
-            SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {"stage": 2}, "🔀 Multi-stage replan: STAGE 2（Action Decision）")
-            decision, reason = await self.replanner.decide_action(
-                goal=state["input"],
-                original_plan=state["plan"],
-                past_steps=state["past_steps"],
-                state_analysis=state_analysis,
-                objective_progress=objective_progress
-            )
+            # ★ダイアログモード時はdecide_actionをスキップ★
+            if objective_progress.is_handling_dialog():
+                # ダイアログモード中は常にPLAN（LLM呼び出しスキップ）
+                decision = "PLAN"
+                reason = "ダイアログ処理モード中: ダイアログ処理を継続"
+                SLog.log(LogCategory.PLAN, LogEvent.SKIP, {
+                    "mode": "dialog",
+                    "decision": decision,
+                    "reason": reason
+                }, "🔒 ダイアログモード: decide_actionスキップ")
+            else:
+                SLog.log(LogCategory.REPLAN, LogEvent.EXECUTE, {"stage": 2}, "🔀 Multi-stage replan: STAGE 2（Action Decision）")
+                decision, reason = await self.replanner.decide_action(
+                    goal=state["input"],
+                    original_plan=state["plan"],
+                    past_steps=state["past_steps"],
+                    state_analysis=state_analysis,
+                    objective_progress=objective_progress
+                )
             SLog.log(LogCategory.PLAN, LogEvent.COMPLETE, {
                 "decision": decision,
                 "reason": reason
@@ -782,7 +793,9 @@ class SimplePlanner:
             else:
                 # PLAN判定 = まだ継続が必要
                 # 現在の目標ステップが達成されている場合は次の目標に進む
-                if state_analysis.current_objective_achieved:
+                # ★セーフガード★ ダイアログモード中、またはblocking_dialogsがある場合は目標を進めない
+                has_blocking_dialogs = bool(state_analysis.blocking_dialogs)
+                if state_analysis.current_objective_achieved and not objective_progress.is_handling_dialog() and not has_blocking_dialogs:
                     current_step = objective_progress.get_current_step()
                     if current_step.status != "completed":
                         evidence = state_analysis.current_objective_evidence or "状態分析により達成確認"

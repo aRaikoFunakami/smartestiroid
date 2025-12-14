@@ -210,18 +210,86 @@ class MultiStageReplanner:
         for i, entry in enumerate(step_history[-3:], 1):  # 最新3件のみ
             step = entry.get("step", "不明")
             success = entry.get("success", False)
+            dialog_mode = entry.get("dialog_mode", False)
             evaluation = entry.get("evaluation", {})
             
             status = "✅ 成功" if success else "❌ 失敗"
+            mode_tag = "🔒 ダイアログ処理" if dialog_mode else "📋 通常処理"
             executor_reason = evaluation.get("executor_reason", "").strip()[:200]
             
             formatted.append(f"""
 ステップ {i}: {step}
+処理モード: {mode_tag}
 状態: {status}
 評価理由: {executor_reason}
 """)
         
         return "\n".join(formatted)
+
+    def _build_dialog_mode_analyze_prompt(
+        self,
+        goal: str,
+        locator: str,
+        step_history: list,
+        current_objective: str,
+        dialog_count: int
+    ) -> str:
+        """ダイアログモード用のanalyze_stateプロンプトを構築
+        
+        ダイアログモード中は目標達成評価をスキップし、
+        ダイアログが閉じたかどうかの確認に特化する。
+        """
+        return f"""
+あなたは画面状態を分析するエキスパートです。
+
+🔒 **ダイアログ処理モード中** (処理済みステップ数: {dialog_count})
+
+【状況説明】
+現在、ブロッキングダイアログを処理中です。
+通常の目標ステップ「{current_objective}」は一時停止しています。
+ダイアログが閉じたら通常処理に復帰します。
+
+【全体の目標（参考）】
+{goal}
+
+【直近の実行ステップ】
+{self._format_step_history(step_history)}
+
+【★重要★ 分析の焦点】
+ダイアログモード中は以下のみを分析してください：
+
+1. **ダイアログの状態確認**
+   - まだブロッキングダイアログが表示されているか？
+   - 表示されている場合、閉じるためのボタン（resource-id）を特定
+
+2. **画面整合性チェック**
+   - page_sourceとスクリーンショット画像の整合性
+
+3. **次のアクション提案**
+   - ダイアログがある場合: 閉じる方法を提案
+   - ダイアログがない場合: 通常処理に復帰する旨を記載
+
+【★超重要★ 目標達成評価について】
+ダイアログモード中は目標達成評価を行いません。
+- current_objective_achieved = false を設定すること
+- current_objective_evidence = "ダイアログ処理モード中のため評価保留" と記載
+
+【出力項目】
+- screen_changes: 画面変化（ダイアログが閉じたか、新しいダイアログが出たか等）
+- current_screen_type: 画面タイプ
+- main_elements: 主要UI要素
+- blocking_dialogs: ブロッキングダイアログ（null = 閉じた）
+- screen_inconsistency: 画面不整合（あれば）
+- test_progress: "ダイアログ処理中"
+- current_objective_achieved: false（固定）
+- current_objective_evidence: "ダイアログ処理モード中のため評価保留"
+- suggested_next_action: 次のアクション提案
+
+現在のロケーター情報:
+{locator}
+
+画面スクリーンショット（前回の画面と現在の画面):
+"""
 
     async def analyze_state(
         self,
@@ -294,7 +362,19 @@ class MultiStageReplanner:
             if current_step:
                 current_objective = current_step.description
         
-        prompt_text = f"""
+        # ★モード別プロンプト分離★
+        if dialog_mode:
+            # ダイアログモード用プロンプト（目標達成評価をスキップ）
+            prompt_text = self._build_dialog_mode_analyze_prompt(
+                goal=goal,
+                locator=locator,
+                step_history=step_history,
+                current_objective=current_objective,
+                dialog_count=dialog_count
+            )
+        else:
+            # 通常モード用プロンプト（従来のプロンプト）
+            prompt_text = f"""
 あなたは画面状態を分析するエキスパートです。
 
 【全体の目標】
@@ -312,23 +392,16 @@ class MultiStageReplanner:
 - 【実行済みステップの詳細情報】から条件不成立（success=False）の理由を確認し、
   テスト合否判定基準に照らして妥当かを判断すること
 
-【★超重要★ ダイアログ処理と目標ステップ達成の区別】
-- ブロッキングダイアログ（初期設定、プライバシーポリシー等）を閉じる操作は、目標ステップとは別物です
-- 例: 目標「アプリを起動する」→ ダイアログを閉じただけでは未達成
-  - activate_appツールを呼び出して初めて達成
-  - 実行プランに「activate_appを呼び出す」等のステップがあるか確認
-- 例: 目標「ホームタブをタップする」→ ダイアログを閉じただけでは未達成
-  - click_elementでホームタブをタップして初めて達成
-  - 実行プランに「ホームタブをクリック」等のステップがあるか確認
-- ★判定ルール★: 実行プランの進捗が「0/0」や「0/N」の場合、目標ステップは未達成
+【★超重要★ 目標ステップの達成判定ルール】
+- 目標ステップの達成判定は、実行プランの進捗（✅完了マーク）のみで行うこと
+- 実行プランの進捗が「0/0」や「0/N」の場合、目標ステップは未達成
+- blocking_dialogsが検出された場合、そのダイアログ処理は別モードで行われるため、
+  ここでは検出のみ報告し、current_objective_achievedの判定には影響させない
 
 【★超重要★ スキップ不可の原則】
 - 「すべてのタブをタップする」等の目標において、初期状態で選択済みの要素があっても「達成済み」とみなしてはいけない
 - 例: ホームタブが初期選択されていても、ホームタブをタップしていなければ「ホームタブのタップ」は未達成
 - 理由: タップすることでUIに変化が発生する可能性があり、テストとして確認が必要
-- 【★重要★】目標ステップの達成判定は、実行プランの進捗（✅完了マーク）のみで行うこと
-  - ダイアログを閉じただけでは目標ステップは完了していない
-  - activate_appツール等、必要なツールを呼び出して初めて完了となる
 
 【★必須★ 「すべて」目標の要素カウント】
 - 「すべてのタブ/ボタン/項目をタップする」目標がある場合:
@@ -431,9 +504,10 @@ class MultiStageReplanner:
 2. 前ステップからの画面変化と差分（UI要素の追加/削除/変更）
 3. 現在の画面の種類（例：ホーム画面、検索結果、設定画面など）
 4. 画面上の主要UI要素の説明 (ボタン、テキストフィールド、画像、リスト、メニュー、ダイアログ、背景などを resource-id や class 名で具体的に記述)
-5. 目標達成を妨げるダイアログやオーバーレイの有無（★超重要★これがあればまず処理が必要）
-   ★ブロッキングダイアログを検出した場合は、閉じるためのボタンの resource-id も blocking_dialogs に記載すること★
-   例: 「利用規約ダイアログ、閉じるボタン: com.example.app:id/terms_agree」
+5. ブロッキングダイアログの検出（★超重要★）
+   - 目標達成を妨げるダイアログやオーバーレイがあれば blocking_dialogs に報告
+   - 閉じるためのボタンの resource-id も記載（例: 「利用規約、閉じる: com.example:id/agree」）
+   - ※検出後はダイアログ処理モードに切り替わり、別のプロンプトで処理される
 6. 現在の目標ステップが達成されているかどうか
 7. 現在の目標ステップの達成/未達成の根拠
 8. 【★重要★ 残りステップの処理方針】（残りステップがある場合のみ）
@@ -542,9 +616,13 @@ class MultiStageReplanner:
         all_objectives_completed = objective_progress.is_all_objectives_completed_with_current(
             state_analysis.current_objective_achieved
         )
+        
+        # 現在の処理モードを取得（decide_action呼び出し時点ではモード遷移済み）
+        current_mode = "🔒 ダイアログ処理モード" if objective_progress.is_handling_dialog() else "📋 通常処理モード"
 
         # StateAnalysisから状態要約を構築
         state_summary = f"""
+現在の処理モード: {current_mode}
 画面タイプ: {state_analysis.current_screen_type}
 画面変化: {state_analysis.screen_changes}
 主要要素: {state_analysis.main_elements}
@@ -565,6 +643,15 @@ class MultiStageReplanner:
 
 【状態分析結果】
 {state_summary}
+
+【★重要★ 処理モードについて】
+現在の処理モードは「{current_mode}」です。
+- 📋 通常処理モード: 目標ステップの達成に向けて処理を進めます
+- 🔒 ダイアログ処理モード: ブロッキングダイアログを閉じる処理中です
+
+※「ダイアログ処理モード中のため評価保留」という根拠が記載されていても、
+  現在のモードが「📋 通常処理モード」であれば、ダイアログは既に閉じられており、
+  通常の目標ステップに向けて処理を進めるべきです。
 
 【判断基準（厳格）】
 ★重要★ 判断基準は「ユーザー目標ステップ」の達成度です。LLM実行計画の進捗ではありません。

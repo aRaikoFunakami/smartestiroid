@@ -36,7 +36,28 @@ smartestiroid/
 
 ---
 
-## 🔧 パッケージ管理（uv）
+## � 設計ドキュメント
+
+詳細な設計や仕様については、`docs/` ディレクトリを参照してください：
+
+| ドキュメント | 説明 |
+|-------------|------|
+| [docs/objective_progress_design.md](docs/objective_progress_design.md) | ObjectiveProgress 設計書 |
+| [docs/dialog_mode_design.md](docs/dialog_mode_design.md) | ダイアログモード分離設計書 |
+| [docs/dialog_mode_flow.md](docs/dialog_mode_flow.md) | ダイアログモードフロー説明書（mermaid図付き） |
+
+### ダイアログモードについて
+
+テスト実行中にブロッキングダイアログ（利用規約、プライバシーポリシー等）が検出された場合、**ダイアログモード**に切り替えて処理を行います。
+
+- **通常モード**: 目標ステップを達成するための処理
+- **ダイアログモード**: ブロッキングダイアログを閉じるための処理
+
+詳細は [docs/dialog_mode_flow.md](docs/dialog_mode_flow.md) を参照してください。
+
+---
+
+## �🔧 パッケージ管理（uv）
 
 このプロジェクトは **uv** を使用してパッケージを管理します。
 

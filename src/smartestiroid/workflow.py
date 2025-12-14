@@ -576,15 +576,48 @@ def create_workflow_functions(
             
             # 目標ステップのコンテキストを取得（Executorが正しい要素を特定できるようにする）
             objective_context = ""
+            dialog_mode = False
             if objective_progress_cache["progress"] is not None:
                 current_obj = objective_progress_cache["progress"].get_current_step()
+                dialog_mode = objective_progress_cache["progress"].is_handling_dialog()
                 if current_obj:
                     objective_context = f"""\n【現在の目標ステップ（重要なコンテキスト）】
 {current_obj.description}
 ※ 上記の目標を達成するために、以下の実行ステップを行います。目標の文脈を考慮して正しい要素を特定してください。
 """
             
-            task_formatted = f"""【あなたの担当】
+            # ★モード別プロンプト分離★
+            if dialog_mode:
+                # ダイアログモード用プロンプト（シンプル化）
+                dialog_count = objective_progress_cache["progress"].get_dialog_handling_count()
+                task_formatted = f"""【あなたの担当】🔒 ダイアログ処理モード
+
+あなたはAndroidアプリのブロッキングダイアログを処理するエージェントです。
+
+🔒 **現在ダイアログ処理モード中** (処理済み: {dialog_count}ステップ)
+
+【タスク】
+{task}
+
+【ダイアログ処理の優先順位】
+1. 「同意する」「OK」「次へ」「閉じる」「Got it」「Accept」等のボタンをタップ
+2. ダイアログ内の指定されたボタンをタップ
+3. 戻るボタン（ハードウェアキー）を押す
+
+【重要】
+- ダイアログを閉じることに集中してください
+- 通常の目標ステップは一時停止中です（ダイアログ処理後に再開）
+- ボタンのresource-idを正確に特定してタップしてください
+
+【厳格ルール】
+- 画像とロケーター情報を突き合わせて正確にボタンを特定すること
+- セレクター(resource-id や xpath)を推測で作成してはならない
+
+画面ロケーター情報:
+{ui_elements}"""
+            else:
+                # 通常モード用プロンプト（従来のプロンプト）
+                task_formatted = f"""【あなたの担当】
 
 - あなたはAndroidアプリをツールを使って自動操作するエージェントです
 {objective_context}
@@ -767,12 +800,15 @@ def create_workflow_functions(
                     SLog.warn(LogCategory.STEP, LogEvent.FAIL, {"step": task, "success": False}, f"FAILED: ステップ '{task}'")
 
                 # 実行されたステップを履歴に追加（評価結果に基づく）
+                # ダイアログモードかどうかをフラグとして記録
+                current_dialog_mode = objective_progress_cache["progress"].is_handling_dialog() if objective_progress_cache["progress"] else False
                 step_history["executed_steps"].append(
                     {
                         "step": task,
                         "response": agent_response["messages"][-1].content,
                         "timestamp": time.time(),
                         "success": step_success,
+                        "dialog_mode": current_dialog_mode,
                         "evaluation": {
                             "executor_success": evaluation_result.success,
                             "executor_reason": evaluation_result.reason,
@@ -843,12 +879,15 @@ def create_workflow_functions(
                 SLog.attach_text(f"Detail:\n{error_msg}\n\nStep: {task}", "❌ Execute Step Error")
 
                 # エラーも履歴に記録
+                # ダイアログモードかどうかをフラグとして記録
+                current_dialog_mode = objective_progress_cache["progress"].is_handling_dialog() if objective_progress_cache["progress"] else False
                 step_history["executed_steps"].append(
                     {
                         "step": task,
                         "response": f"Error: {error_msg}",
                         "timestamp": time.time(),
                         "success": False,
+                        "dialog_mode": current_dialog_mode,
                     }
                 )
 
