@@ -612,6 +612,12 @@ def create_workflow_functions(
 【厳格ルール】
 - 画像とロケーター情報を突き合わせて正確にボタンを特定すること
 - セレクター(resource-id や xpath)を推測で作成してはならない
+- find_element ツールを使用際は、画面ロケーター情報を活用して取得した最も適切なセレクター(resource-id や xpath)を構築すること
+- 複数の要素が類似している場合は、目標ステップの指示と bounds や resource-id や content-desc や class 名を参考に正確に特定すること
+- ★重要★ 同じresource-idが複数存在する場合は by="id" を使用禁止。XPathで一意に特定すること:
+  - インデックス: (//*[@resource-id="xxx"])[1]
+  - テキスト特定: //*[@resource-id="xxx"][.//android.widget.TextView[@text="対象テキスト"]]
+  - bounds特定: //*[@resource-id="xxx"][@bounds="[x1,y1][x2,y2]"]
 
 画面ロケーター情報:
 {ui_elements}"""
@@ -684,6 +690,10 @@ def create_workflow_functions(
 - 複数の要素が類似している場合は、目標ステップの指示と bounds や resource-id や content-desc や class 名を参考に正確に特定すること
 - セレクター(resource-id や xpath)を推測で作成してはならず、必ず画面ロケーター情報から正確に取得すること
 - find_element ツールを使用際は、画面ロケーター情報を活用して取得した最も適切なセレクター(resource-id や xpath)を構築すること
+- ★重要★ 同じresource-idが複数存在する場合は by="id" を使用禁止。XPathで一意に特定すること:
+  - インデックス: (//*[@resource-id="xxx"])[1]
+  - テキスト特定: //*[@resource-id="xxx"][.//android.widget.TextView[@text="対象テキスト"]]
+  - bounds特定: //*[@resource-id="xxx"][@bounds="[x1,y1][x2,y2]"]
 
 画面ロケーター情報:
 {ui_elements}"""
