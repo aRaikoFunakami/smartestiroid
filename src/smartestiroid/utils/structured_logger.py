@@ -544,15 +544,21 @@ class StructuredLogger:
                 # screenshot_base64 があれば画像としてattach
                 if "screenshot_base64" in data:
                     try:
-                        image_bytes = base64.b64decode(
-                            data["screenshot_base64"]
-                            .replace("data:image/jpeg;base64,", "")
-                            .replace("data:image/png;base64,", "")
-                        )
+                        screenshot_data = data["screenshot_base64"]
+                        # 画像フォーマットを判定
+                        if "data:image/png;base64," in screenshot_data:
+                            attachment_type = allure.attachment_type.PNG
+                            clean_data = screenshot_data.replace("data:image/png;base64,", "")
+                        else:
+                            # デフォルトはJPEG（data:image/jpeg;base64, または プレフィックスなし）
+                            attachment_type = allure.attachment_type.JPG
+                            clean_data = screenshot_data.replace("data:image/jpeg;base64,", "")
+                        
+                        image_bytes = base64.b64decode(clean_data)
                         allure.attach(
                             image_bytes,
                             name=f"📷 {message_short}" if message else "📷 Screenshot",
-                            attachment_type=allure.attachment_type.PNG
+                            attachment_type=attachment_type
                         )
                     except Exception:
                         pass  # 画像デコード失敗は無視
@@ -569,15 +575,26 @@ class StructuredLogger:
                         image_path = Path(data["image_path"])
                         if image_path.exists():
                             label = data.get('label') or 'Screenshot'
-                            allure.attach.file(
-                                str(image_path),
+                            # ファイル形式を自動判定
+                            if image_path.suffix.lower() == '.png':
+                                attachment_type = allure.attachment_type.PNG
+                            else:
+                                attachment_type = allure.attachment_type.JPG
+                            
+                            # ファイルを読み込んでバイト列としてアタッチ
+                            with open(image_path, "rb") as f:
+                                image_bytes = f.read()
+                            
+                            allure.attach(
+                                image_bytes,
                                 name=f"📷 {label}",
-                                attachment_type=allure.attachment_type.PNG
+                                attachment_type=attachment_type
                             )
                             # 画像をアタッチした場合はテキストはアタッチしない
                             return
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # 画像添付失敗時はエラーログを出力して続行
+                        print(f"⚠️  Allure画像添付失敗: {e}")
             
             # === テキストデータのattach ===
             content_parts = []
@@ -737,7 +754,7 @@ class StructuredLogger:
         """スクリーンショットを保存してログに記録
         
         Args:
-            image_data: PNG画像のバイナリデータ
+            image_data: JPEG画像のバイナリデータ
             category: ログカテゴリ
             event: イベント種別
             label: 画像のラベル（ファイル名に使用）
@@ -753,7 +770,7 @@ class StructuredLogger:
             cls._image_counter += 1
             timestamp = datetime.now().strftime("%H%M%S")
             label_part = f"_{label}" if label else ""
-            filename = f"{cls._image_counter:04d}_{timestamp}{label_part}.png"
+            filename = f"{cls._image_counter:04d}_{timestamp}{label_part}.jpg"
             image_path = cls._images_dir / filename
             
             # 画像を保存
@@ -797,7 +814,7 @@ class StructuredLogger:
         """Base64エンコードされたスクリーンショットを保存
         
         Args:
-            base64_data: Base64エンコードされたPNG画像データ
+            base64_data: Base64エンコードされたJPEG画像データ
             category: ログカテゴリ
             event: イベント種別
             label: 画像のラベル

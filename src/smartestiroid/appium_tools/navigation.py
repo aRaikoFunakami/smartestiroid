@@ -20,30 +20,39 @@ from .xml_compressor import compress_xml
 logger = logging.getLogger(__name__)
 
 # スクリーンショット保存先のパス（環境変数で設定可能）
-SCREENSHOT_PATH = os.getenv("SMARTESTIROID_SCREENSHOT_PATH", "/app/data/latest_screenshot.png")
+SCREENSHOT_PATH = os.getenv("SMARTESTIROID_SCREENSHOT_PATH", "/app/data/latest_screenshot.jpg")
 
 
 def _save_screenshot_to_file(screenshot_base64: str) -> None:
-    """スクリーンショットをファイルに保存する（UI表示用）
+    """スクリーンショットをJPEG形式でファイルに保存する（UI表示用）
     
     アトミックな書き込みを行い、読み込み側が不完全なファイルを取得しないようにする。
     一時ファイルに書き込んでから rename することで、ファイルの置き換えをアトミックに行う。
+    
+    PNG形式のスクリーンショットをJPEGに変換してファイルサイズを削減します。
     
     Note: ログ用のスクリーンショット保存は呼び出し元（workflow.py等）で
     SLog.attach_screenshot()を使って行うため、ここでは行わない。
     """
     try:
+        # base64デコード
         screenshot_data = base64.b64decode(screenshot_base64)
+        
+        # PIL Imageで開いてJPEGに変換
+        img = Image.open(io.BytesIO(screenshot_data))
+        if img.mode == "RGBA":
+            img = img.convert("RGB")
         
         # 一時ファイルに書き込み（同じディレクトリに作成してrenameがアトミックになるようにする）
         dir_path = os.path.dirname(SCREENSHOT_PATH)
         with tempfile.NamedTemporaryFile(mode='wb', dir=dir_path, delete=False, suffix='.tmp') as f:
-            f.write(screenshot_data)
+            # JPEG形式で保存（quality=85でファイルサイズと画質のバランスを取る）
+            img.save(f, format="JPEG", quality=85)
             temp_path = f.name
         
         # アトミックにファイルを置き換え
         os.replace(temp_path, SCREENSHOT_PATH)
-        logger.debug(f"Screenshot saved to {SCREENSHOT_PATH}")
+        logger.debug(f"Screenshot saved to {SCREENSHOT_PATH} as JPEG")
     except Exception as e:
         logger.warning(f"Failed to save screenshot to file: {e}")
         # 一時ファイルが残っていたら削除
